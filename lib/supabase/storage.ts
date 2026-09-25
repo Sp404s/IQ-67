@@ -27,6 +27,7 @@ export type LoadedSession = {
   correctionNumber: number;
   report: SessionReport | null;
 };
+export type SessionTimeline = SessionSummary & { messages: StoredMessage[] };
 
 async function ensureUser() {
   const supabase = getSupabase();
@@ -71,8 +72,12 @@ export async function createSession(player: SideProfile, opponent: SideProfile, 
   const payload = { player, opponent, plan, current_state: state, status: state.status, title: sessionTitle(player, opponent) };
   const { data, error } = await supabase.from("negotiation_sessions").insert(payload).select("id").single();
   if (error || !data) return null;
-  const { error: messageError } = await supabase.from("negotiation_messages").insert({ session_id: data.id, turn: 0, role: "opponent", content: openingMessage });
-  if (messageError) return null;
+  const openingAction = { type: "statement", label: "начало переговоров", rationale: "Исходное состояние оппонента.", before: state };
+  const [messageResult, snapshotResult] = await Promise.all([
+    supabase.from("negotiation_messages").insert({ session_id: data.id, turn: 0, role: "opponent", content: openingMessage }),
+    supabase.from("negotiation_snapshots").insert({ session_id: data.id, turn: 0, state, action: openingAction }),
+  ]);
+  if (messageResult.error || snapshotResult.error) return null;
   return data.id as string;
 }
 
@@ -147,7 +152,7 @@ export async function loadSession(sessionId: string): Promise<LoadedSession | nu
     role: row.role as StoredMessage["role"],
     text: String(row.content),
     turn: Number(row.turn),
-    snapshot: row.role === "opponent" ? snapshots.get(Number(row.turn)) : undefined,
+    snapshot: snapshots.get(Number(row.turn)) ?? (Number(row.turn) === 0 ? { turn: 0, before: createInitialState(), after: createInitialState(), action: "statement", actionLabel: "начало переговоров" } : undefined),
   }));
   return {
     id: String(session.id), player, opponent, plan,
@@ -157,6 +162,15 @@ export async function loadSession(sessionId: string): Promise<LoadedSession | nu
     correctionNumber: Number(session.correction_number ?? 0),
     report: session.report as SessionReport | null,
   };
+}
+
+export async function listSessionTimelines(): Promise<SessionTimeline[]> {
+  const summaries = await listSessions();
+  const loaded = await Promise.all(summaries.map(async (summary) => {
+    const session = await loadSession(summary.id);
+    return session ? { ...summary, messages: session.messages } : null;
+  }));
+  return loaded.filter((session): session is SessionTimeline => Boolean(session));
 }
 
 export async function createBranchSession(sourceSessionId: string, fromTurn: number, player: SideProfile, opponent: SideProfile, plan: NegotiationPlan, baseState: NegotiationState) {

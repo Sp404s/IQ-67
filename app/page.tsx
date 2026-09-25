@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { applySemanticEvaluation, createInitialState, sideLabels, type NegotiationPlan, type NegotiationState, type SemanticEvaluation, type SessionReport, type SideProfile } from "./negotiation";
-import { createBranchSession, createSession, listSessions, loadSession, saveSessionReport, saveTurn, type SessionSummary, type StoredMessage } from "@/lib/supabase/storage";
+import { createBranchSession, createSession, listSessionTimelines, loadSession, saveSessionReport, saveTurn, type SessionSummary, type SessionTimeline, type StoredMessage } from "@/lib/supabase/storage";
 
 type Screen = "home" | "workspace" | "talk" | "result" | "history";
 type Message = StoredMessage;
@@ -30,6 +30,7 @@ export default function Home() {
   const [sessionId, setSessionId] = useState<string | null>(null), [saveState, setSaveState] = useState<"local" | "saving" | "saved">("local");
   const [thinking, setThinking] = useState(false), [aiError, setAiError] = useState("");
   const [sessions, setSessions] = useState<SessionSummary[]>([]), [historyLoading, setHistoryLoading] = useState(false), [historyError, setHistoryError] = useState("");
+  const [timelines, setTimelines] = useState<SessionTimeline[]>([]);
   const [rewrite, setRewrite] = useState<RewritePoint | null>(null);
   const [branchInfo, setBranchInfo] = useState<{ parentSessionId: string | null; branchedFromTurn: number | null; correctionNumber: number }>({ parentSessionId: null, branchedFromTurn: null, correctionNumber: 0 });
   const [report, setReport] = useState<SessionReport | null>(null), [reportLoading, setReportLoading] = useState(false);
@@ -41,7 +42,8 @@ export default function Home() {
   async function refreshHistory() {
     setHistoryLoading(true); setHistoryError("");
     try {
-      const loaded = await listSessions();
+      const loaded = await listSessionTimelines();
+      setTimelines(loaded);
       setSessions(loaded);
       return loaded;
     } catch {
@@ -184,6 +186,20 @@ export default function Home() {
     setReport(loaded.report); setRewrite(null); setDraft(""); setAiError(""); setSaveState("saved"); setScreen("talk");
   }
 
+  async function openHistoryPoint(id: string, selected: Message) {
+    setHistoryLoading(true); setHistoryError("");
+    const loaded = await loadSession(id);
+    setHistoryLoading(false);
+    if (!loaded) { setHistoryError("Не удалось восстановить выбранный ход."); return; }
+    const rewriteTurn = selected.role === "player" ? selected.turn : selected.turn + 1;
+    const visibleMessages = loaded.messages.filter((message) => message.turn < rewriteTurn);
+    const previousSnapshot = [...visibleMessages].reverse().find((message) => message.snapshot)?.snapshot;
+    const restoredState = { ...(previousSnapshot?.after ?? createInitialState()), status: "active" as const };
+    setPlayer(loaded.player); setOpponent(loaded.opponent); setPlan(loaded.plan); setState(restoredState); setMessages(visibleMessages); setSessionId(loaded.id);
+    setBranchInfo({ parentSessionId: loaded.parentSessionId, branchedFromTurn: loaded.branchedFromTurn, correctionNumber: loaded.correctionNumber });
+    setReport(null); setRewrite({ turn: rewriteTurn, text: selected.role === "player" ? selected.text : "" }); setDraft(selected.role === "player" ? selected.text : ""); setAiError(""); setSaveState("saved"); setScreen("talk");
+  }
+
   function reset() {
     setState(createInitialState()); setMessages([]); setSessionId(null); setSaveState("local"); setAiError(""); setPlan(null); setRewrite(null); setReport(null); setBranchInfo({ parentSessionId: null, branchedFromTurn: null, correctionNumber: 0 }); setScreen("workspace");
   }
@@ -204,7 +220,7 @@ export default function Home() {
     <main>
       {screen === "home" && <section className="hero"><p className="kicker">Тренажёр переговоров</p><h1>Создайте оппонента и найдите путь к соглашению.</h1><p className="hero-copy">Характер, мотивация и скрытые интересы управляют поведением оппонента. Каждая попытка сохраняется, а любую реплику можно исправить в новой ветке.</p><div className="hero-actions"><button className="primary" onClick={() => setScreen("workspace")}>Начать</button><button className="quiet" onClick={() => { setScreen("history"); void refreshHistory(); }}>Открыть историю</button></div></section>}
 
-      {screen === "history" && <HistoryView sessions={sessions} loading={historyLoading} error={historyError} names={sessionNames} onOpen={(id) => void openSavedSession(id)} onNew={() => setScreen("workspace")} />}
+      {screen === "history" && <HistoryView timelines={timelines} loading={historyLoading} error={historyError} names={sessionNames} onOpen={(id) => void openSavedSession(id)} onPoint={(id, message) => void openHistoryPoint(id, message)} onNew={() => setScreen("workspace")} />}
 
       {screen === "workspace" && <section className="workspace"><header className="workspace-head"><p className="kicker">Настройка оппонента</p><h1>Поле переговоров</h1><p>Настройте обе стороны. Перед стартом система скрытно построит последовательный маршрут к соглашению.</p></header><div className="sides"><SideCard title="Вы играете" profile={player} onChange={changePlayer} /><button className="swap" onClick={swapSides}><span>⇄</span>Поменять стороны</button><SideCard title="Оппонент" profile={opponent} onChange={changeOpponent} onRandomize={randomizeOpponent} /></div><section className="plan-card"><div><p className="kicker">Подготовка переговоров</p><h2>{plan ? "Маршрут готов" : "Постройте маршрут перед стартом"}</h2><p>{plan ? `Создано ${plan.route.length} скрытых смысловых этапов. Лимит: ${plan.maxMessages} реплик.` : "Этапы, ключевые фразы и критерии прохождения будут сформированы заранее и останутся скрытыми до завершения сессии."}</p></div><button className="quiet" onClick={() => void prepareOpponent()} disabled={preparing}>{preparing ? "Подготовка…" : plan ? "Построить заново" : "Построить скрытый маршрут"}</button></section><div className="controls"><button className="quiet" onClick={() => setScreen("home")}>Назад</button><button className="primary" onClick={startNegotiation} disabled={!plan}>Начать переговоры</button></div></section>}
 
@@ -215,8 +231,18 @@ export default function Home() {
   </div>;
 }
 
-function HistoryView({ sessions, loading, error, names, onOpen, onNew }: { sessions: SessionSummary[]; loading: boolean; error: string; names: Map<string, string>; onOpen: (id: string) => void; onNew: () => void }) {
-  return <section className="history-view"><header className="history-head"><div><p className="kicker">Сохранённые переговоры</p><h1>История и ветки</h1><p>Основные диалоги и исправленные версии хранятся отдельно. Откройте любую версию и продолжите с её текущего состояния.</p></div><button className="primary" onClick={onNew}>Новые переговоры</button></header>{error && <p className="ai-error">{error}</p>}{loading ? <p className="history-empty">Загрузка истории…</p> : sessions.length === 0 ? <p className="history-empty">Сохранённых переговоров пока нет.</p> : <div className="history-list">{sessions.map((session) => <article className={`history-card ${session.parentSessionId ? "branch" : ""}`} key={session.id}><div className="history-card-main"><div className="history-badges"><span>{session.parentSessionId ? `Исправление ${session.correctionNumber} из 3 · ход ${session.branchedFromTurn}` : "Основная сессия"}</span><span>{session.status === "active" ? "В процессе" : session.status === "deal" ? "Сделка" : "Завершено"}</span></div><h2>{session.title}</h2><p>{session.player.name} {session.player.patronymic} ↔ {session.opponent.name} {session.opponent.patronymic}</p>{session.parentSessionId && <small>Исходная версия: {names.get(session.parentSessionId) ?? "сохранённая сессия"}</small>}</div><div className="history-card-side"><time>{new Date(session.updatedAt).toLocaleString("ru-RU", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</time><span>{session.messageCount} реплик</span><button className="quiet" onClick={() => onOpen(session.id)}>Открыть</button></div></article>)}</div>}</section>;
+function HistoryView({ timelines, loading, error, names, onOpen, onPoint, onNew }: { timelines: SessionTimeline[]; loading: boolean; error: string; names: Map<string, string>; onOpen: (id: string) => void; onPoint: (id: string, message: StoredMessage) => void; onNew: () => void }) {
+  const [query, setQuery] = useState("");
+  const normalizedQuery = query.trim().toLocaleLowerCase("ru-RU");
+  const depthOf = (session: SessionTimeline) => {
+    let depth = 0, parent = session.parentSessionId;
+    const visited = new Set<string>();
+    while (parent && depth < 3 && !visited.has(parent)) { visited.add(parent); depth += 1; parent = timelines.find((item) => item.id === parent)?.parentSessionId ?? null; }
+    return depth;
+  };
+  const visible = timelines.filter((session) => !normalizedQuery || session.title.toLocaleLowerCase("ru-RU").includes(normalizedQuery) || session.messages.some((message) => message.text.toLocaleLowerCase("ru-RU").includes(normalizedQuery)));
+  const matchCount = normalizedQuery ? visible.reduce((count, session) => count + session.messages.filter((message) => message.text.toLocaleLowerCase("ru-RU").includes(normalizedQuery)).length, 0) : 0;
+  return <section className="history-view"><header className="history-head"><div><p className="kicker">Карта переговоров</p><h1>Дерево диалогов</h1><p>Каждая точка хранит реплику и состояние оппонента на этом ходе. Найдите нужное место и создайте альтернативную ветку — доступно до трёх исправлений.</p></div><button className="primary" onClick={onNew}>Новые переговоры</button></header><div className="tree-search"><AppIcon name="chat" /><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Найти слово или фразу во всех диалогах" aria-label="Поиск по истории диалогов" />{normalizedQuery && <span>{matchCount} совпад.</span>}</div>{error && <p className="ai-error">{error}</p>}{loading ? <p className="history-empty">Загрузка дерева…</p> : visible.length === 0 ? <p className="history-empty">{normalizedQuery ? "Совпадений не найдено." : "Сохранённых переговоров пока нет."}</p> : <div className="dialogue-tree">{visible.map((session) => { const depth = depthOf(session); return <article className={`tree-branch depth-${depth}`} key={session.id}><div className="branch-line" /><header className="tree-branch-head"><div><div className="history-badges"><span>{session.parentSessionId ? `Ветка ${session.correctionNumber} из 3 · после хода ${session.branchedFromTurn}` : "Основная линия"}</span><span>{session.status === "active" ? "В процессе" : session.status === "deal" ? "Сделка" : "Завершено"}</span></div><h2>{session.title}</h2><p>{session.player.name} {session.player.patronymic} ↔ {session.opponent.name} {session.opponent.patronymic}</p>{session.parentSessionId && <small>Ответвление от: {names.get(session.parentSessionId) ?? "предыдущая версия"}</small>}</div><button className="quiet" onClick={() => onOpen(session.id)}>Открыть полностью</button></header><div className="turn-nodes">{session.messages.map((message, index) => { const matched = normalizedQuery && message.text.toLocaleLowerCase("ru-RU").includes(normalizedQuery); const snapshot = message.snapshot; return <button className={`turn-node ${message.role} ${matched ? "match" : ""}`} key={`${session.id}-${message.turn}-${message.role}-${index}`} onClick={() => onPoint(session.id, message)} title="Вернуться к этой точке"><span className="node-dot"><AppIcon name={message.role === "player" ? "chat" : "spark"} /></span><span className="node-copy"><small>{message.role === "player" ? `Вы · ход ${message.turn}` : `${session.opponent.role} · ход ${message.turn}`}</small><strong>{message.text}</strong>{snapshot && <em>Доверие {snapshot.after.trust} · Интерес {snapshot.after.dealInterest} · Раздражение {snapshot.after.irritation}</em>}</span></button>; })}</div></article>; })}</div>}</section>;
 }
 
 function SideCard({ title, profile, onChange, onRandomize }: { title: string; profile: SideProfile; onChange: (value: SideProfile) => void; onRandomize?: () => void }) {
