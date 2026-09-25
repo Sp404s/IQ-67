@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import { applySemanticEvaluation, createInitialState, sideLabels, type NegotiationPlan, type NegotiationState, type SemanticEvaluation, type SessionReport, type SideProfile } from "./negotiation";
 import { createBranchSession, createSession, listSessions, loadSession, saveSessionReport, saveTurn, type SessionSummary, type StoredMessage } from "@/lib/supabase/storage";
 
@@ -188,6 +189,14 @@ export default function Home() {
   }
 
   return <div className="app-shell">
+    <nav className="side-nav" aria-label="Основная навигация">
+      <button className={`icon-button ${screen === "home" ? "active" : ""}`} data-tooltip="Главная" aria-label="Главная" onClick={() => setScreen("home")}><AppIcon name="home" /></button>
+      <button className={`icon-button ${screen === "workspace" ? "active" : ""}`} data-tooltip="Новые переговоры" aria-label="Новые переговоры" onClick={() => setScreen("workspace")}><AppIcon name="spark" /></button>
+      <button className={`icon-button ${screen === "talk" ? "active" : ""}`} data-tooltip="Текущий диалог" aria-label="Текущий диалог" disabled={!plan} onClick={() => plan && setScreen("talk")}><AppIcon name="chat" /></button>
+      <button className={`icon-button ${screen === "history" ? "active" : ""}`} data-tooltip="История" aria-label="История" onClick={() => { setScreen("history"); void refreshHistory(); }}><AppIcon name="history" /></button>
+      <span className="nav-spacer" />
+      <button className={`icon-button ${screen === "result" ? "active" : ""}`} data-tooltip="Результаты" aria-label="Результаты" disabled={!report} onClick={() => report && setScreen("result")}><AppIcon name="chart" /></button>
+    </nav>
     <header className="topbar">
       <button className="wordmark" onClick={() => setScreen("home")}>Арена переговоров</button>
       <div className="top-actions"><button className="nav-button" onClick={() => { setScreen("history"); void refreshHistory(); }}>История{sessions.length ? ` · ${sessions.length}` : ""}</button><span className="status">{saveState === "saved" ? "Сохранено в Supabase" : saveState === "saving" ? "Сохранение…" : "Локальный режим"}</span></div>
@@ -215,7 +224,27 @@ function SideCard({ title, profile, onChange, onRandomize }: { title: string; pr
   return <article className="side-card"><div className="side-card-title"><p className="kicker">{title}</p>{onRandomize && <button className="randomize" type="button" onClick={onRandomize}>Случайная личность</button>}</div><div className="name-fields"><label>Имя<input value={profile.name} onChange={(e) => field("name", e.target.value)} /></label><label>Отчество<input value={profile.patronymic} onChange={(e) => field("patronymic", e.target.value)} /></label></div><label>Сторона переговоров<select value={profile.side} onChange={(e) => field("side", e.target.value)}>{Object.entries(sideLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label>Профессия или должность<input value={profile.role} onChange={(e) => field("role", e.target.value)} placeholder="Например: маркетолог" /></label><label>Цель переговоров<textarea value={profile.goal} onChange={(e) => field("goal", e.target.value)} /></label><label>Информация о человеке<textarea value={profile.person} onChange={(e) => field("person", e.target.value)} /></label><SelectField label="Характер" value={profile.character} options={characterOptions} onChange={(value) => field("character", value)} /><SelectField label="Личная мотивация" value={profile.motivation} options={motivationOptions} onChange={(value) => field("motivation", value)} /><SelectField label="Граница решения" value={profile.boundaries} options={boundaryOptions} onChange={(value) => field("boundaries", value)} /><SelectField label="Скрытый интерес" value={profile.hiddenInterest} options={interestOptions} onChange={(value) => field("hiddenInterest", value)} />{onRandomize && <div className="behavior-fields"><SelectField label="Стиль речи" value={profile.speechStyle} options={speechOptions} onChange={(value) => field("speechStyle", value)} /><SelectField label="Речевая привычка" value={profile.habits} options={habitOptions} onChange={(value) => field("habits", value)} /><SelectField label="Лексика" value={profile.languageStyle} options={languageOptions} onChange={(value) => field("languageStyle", value)} /><SelectField label="Эмоциональность" value={profile.emotionality} options={emotionalityOptions} onChange={(value) => field("emotionality", value)} /></div>}</article>;
 }
 function SelectField({ label, value, options, onChange }: { label: string; value: string; options: string[]; onChange: (value: string) => void }) { return <label>{label}<select value={value} onChange={(event) => onChange(event.target.value)}>{options.map((option) => <option key={option}>{option}</option>)}</select></label>; }
-function Meter({ label, value, inverse = false }: { label: string; value: number; inverse?: boolean }) { return <div className="meter"><div><span>{label}</span><strong>{value}</strong></div><div className="meter-track"><span style={{ width: `${inverse ? 100 - value : value}%` }} /></div></div>; }
+type AppIconName = "home" | "spark" | "chat" | "history" | "chart" | "trust" | "interest" | "irritation" | "ethics" | "understanding";
+function AppIcon({ name }: { name: AppIconName }) {
+  const paths: Record<AppIconName, ReactNode> = {
+    home: <><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10.5V20h13v-9.5"/></>,
+    spark: <><path d="m12 3 1.2 4.2L17 9l-3.8 1.8L12 15l-1.2-4.2L7 9l3.8-1.8L12 3Z"/><path d="m19 15 .7 2.3L22 18l-2.3.7L19 21l-.7-2.3L16 18l2.3-.7L19 15Z"/></>,
+    chat: <><path d="M4 5.5h16v11H9l-5 3v-14Z"/><path d="M8 10h8M8 13h5"/></>,
+    history: <><path d="M4 5v5h5"/><path d="M5.6 17.5A8 8 0 1 0 4 10"/><path d="M12 7v5l3 2"/></>,
+    chart: <><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></>,
+    trust: <><path d="M12 21s-8-4.8-8-11a4.5 4.5 0 0 1 8-2.8A4.5 4.5 0 0 1 20 10c0 6.2-8 11-8 11Z"/></>,
+    interest: <><circle cx="12" cy="12" r="3"/><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"/></>,
+    irritation: <><path d="M13 2 5 13h6l-1 9 9-13h-6V2Z"/></>,
+    ethics: <><path d="M12 3v18M5 7h14M5 7l-3 6h6L5 7ZM19 7l-3 6h6l-3-6ZM8 21h8"/></>,
+    understanding: <><path d="M9 18h6M10 21h4"/><path d="M8.2 14.5A7 7 0 1 1 15.8 14.5C14.6 15.3 14 16 14 17h-4c0-1-.6-1.7-1.8-2.5Z"/></>,
+  };
+  return <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg>;
+}
+function metricIcon(label: string): AppIconName { if (label.includes("Довер")) return "trust"; if (label.includes("Интерес")) return "interest"; if (label.includes("Раздраж")) return "irritation"; if (label.includes("Этич")) return "ethics"; return "understanding"; }
+function Meter({ label, value, inverse = false }: { label: string; value: number; inverse?: boolean }) {
+  const displayed = inverse ? 100 - value : value;
+  return <div className="meter" tabIndex={0} data-tooltip={label} aria-label={`${label}: ${value}`}><div className="meter-ring" style={{ background: `conic-gradient(var(--ink) ${displayed}%, var(--line) ${displayed}% 100%)` }}><span><AppIcon name={metricIcon(label)} /></span></div><strong>{value}</strong></div>;
+}
 function ResultRow({ label, value }: { label: string; value: string | number }) { return <div><span>{label}</span><strong>{value}</strong></div>; }
 function ReportBlock({ title, items }: { title: string; items: string[] }) { return <article><h3>{title}</h3>{items.length ? <ul>{items.map((item, index) => <li key={`${title}-${index}`}>{item}</li>)}</ul> : <p>Не выявлено.</p>}</article>; }
 
