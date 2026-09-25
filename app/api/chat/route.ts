@@ -53,12 +53,34 @@ function parseEvaluation(content: string, allowedIds: string[]): SemanticEvaluat
 }
 
 async function complete(apiKey: string, messages: Array<{ role: string; content: string }>, json = false) {
-  const response = await fetch("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", { method: "POST", headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }, body: JSON.stringify({ model, messages, temperature: json ? 0.15 : 0.65, max_completion_tokens: json ? 900 : 350, response_format: json ? { type: "json_object" } : undefined }) });
-  const data = await response.json() as GeminiResult;
-  if (!response.ok) throw new Error(data.error?.message ?? `Gemini вернул ошибку ${response.status}.`);
-  const content = data.choices?.[0]?.message?.content?.trim();
-  if (!content) throw new Error("Модель вернула пустой ответ.");
-  return { content, model: data.model ?? model };
+  const retryableStatuses = new Set([429, 500, 502, 503, 504]);
+  let lastStatus = 0;
+  let lastMessage = "Gemini временно недоступен.";
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const response = await fetch("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", { method: "POST", headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }, body: JSON.stringify({ model, messages, temperature: json ? 0.15 : 0.65, max_completion_tokens: json ? 900 : 350, response_format: json ? { type: "json_object" } : undefined }), cache: "no-store" });
+      const data = await response.json().catch(() => ({})) as GeminiResult;
+      if (response.ok) {
+        const content = data.choices?.[0]?.message?.content?.trim();
+        if (!content) throw new Error("Модель вернула пустой ответ.");
+        return { content, model: data.model ?? model };
+      }
+
+      lastStatus = response.status;
+      lastMessage = data.error?.message ?? `Gemini вернул ошибку ${response.status}.`;
+      if (!retryableStatuses.has(response.status) || attempt === 2) break;
+    } catch (error) {
+      lastMessage = error instanceof Error ? error.message : "Ошибка соединения с Gemini.";
+      if (attempt === 2 || /пустой ответ/i.test(lastMessage)) break;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 500 * 2 ** attempt));
+  }
+
+  if (lastStatus === 503) throw new Error("Gemini временно перегружен. Подождите несколько секунд и отправьте реплику ещё раз.");
+  if (lastStatus === 429) throw new Error("Достигнут лимит запросов Gemini. Подождите минуту и повторите попытку.");
+  throw new Error(lastMessage);
 }
 
 export async function GET() { return Response.json({ configured: Boolean(process.env.GEMINI_API_KEY), provider: "gemini", model }); }
