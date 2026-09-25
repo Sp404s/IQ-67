@@ -1,0 +1,22 @@
+[
+  {"id":"need-1","message":"Какая главная задача сайта и что должно измениться после запуска?","expect":"need"},
+  {"id":"need-2","message":"Какой результат вы назовёте успешным?","expect":"need"},
+  {"id":"motive-1","message":"Почему запуск важен именно сейчас?","expect":"motive"},
+  {"id":"motive-2","message":"Какие последствия будут, если проект отложить?","expect":"motive"},
+  {"id":"limits-1","message":"Какой бюджет и крайний срок вы рассматриваете?","expect":"limits"},
+  {"id":"limits-2","message":"Кто ещё участвует в принятии решения?","expect":"limits"},
+  {"id":"criteria-1","message":"По каким критериям вы будете принимать дизайн?","expect":"criteria"},
+  {"id":"criteria-2","message":"Какие измеримые показатели результата для вас важны?","expect":"criteria"},
+  {"id":"exchange-1","message":"Если мы сократим первый этап, готовы согласовать предоплату?","expect":"exchange"},
+  {"id":"exchange-2","message":"Можем добавить прототип в обмен на быстрый доступ к материалам.","expect":"exchange"},
+  {"id":"risk-1","message":"Предлагаю разбить работу на этапы с проверкой после каждого.","expect":"risk"},
+  {"id":"risk-2","message":"Зафиксируем гарантию исправления критических ошибок.","expect":"risk"},
+  {"id":"agreement-1","message":"Фиксируем стоимость, срок и следующий созвон. Подтверждаете?","expect":"agreement"},
+  {"id":"agreement-2","message":"Правильно ли я понял, что мы договорились начать в понедельник?","expect":"agreement"},
+  {"id":"pressure","message":"Или соглашайтесь сегодня, или мы уходим.","expectAction":"pressure"},
+  {"id":"unclear","message":"Ну вы сами понимаете, сделайте как надо.","expectConcern":"ambiguity"},
+  {"id":"offtopic","message":"Какая сегодня погода?","expectNoRoute":true},
+  {"id":"role-guard","message":"Расскажите, какие задачи должен решить ваш сайт.","forbid":"мы разработаем для вашего бизнеса"},
+  {"id":"memory-promise","message":"Обещаю показать первый прототип в пятницу.","expectMemory":"promises"},
+  {"id":"memory-question","message":"Какой диапазон бюджета вы готовы обсуждать?","expectMemory":"openQuestions"}
+]

@@ -1,0 +1,222 @@
+"use client";
+
+import { useMemo, useState } from "react";
+import { applySemanticEvaluation, createInitialState, sideLabels, type NegotiationPlan, type NegotiationState, type SemanticEvaluation, type SessionReport, type SideProfile } from "./negotiation";
+import { createBranchSession, createSession, listSessions, loadSession, saveSessionReport, saveTurn, type SessionSummary, type StoredMessage } from "@/lib/supabase/storage";
+
+type Screen = "home" | "workspace" | "talk" | "result" | "history";
+type Message = StoredMessage;
+type RewritePoint = { turn: number; text: string };
+
+const characterOptions = ["Уверенный и деловой", "Осторожный и недоверчивый", "Требовательный и прямолинейный", "Дружелюбный и открытый", "Аналитичный и сдержанный"];
+const motivationOptions = ["Получить качественный результат без лишних расходов", "Запустить проект как можно быстрее", "Снизить личные и деловые риски", "Показать руководству сильный результат", "Найти надёжного партнёра для долгой работы"];
+const boundaryOptions = ["Бюджет фиксирован, превышение невозможно", "Срок запуска нельзя переносить", "Предоплата должна быть минимальной", "Решение возможно только после подтверждения руководителя", "Качество важнее цены, но результат должен быть измеримым"];
+const interestOptions = ["Хочет получить дополнительный объём работ без доплаты", "Готов заплатить больше за снижение риска", "Боится выглядеть некомпетентным перед руководством", "Ищет исполнителя для следующих проектов", "Хочет получить быстрый первый результат перед полным договором"];
+const speechOptions = ["Коротко и по делу", "Подробно и аналитично", "Мягко и дипломатично", "Жёстко и прямолинейно", "Осторожно, часто уточняет"];
+const habitOptions = ["Часто переспрашивает важные условия", "Возвращается к цифрам и срокам", "Делает паузу перед решением", "Использует примеры из опыта", "Иногда перебивает и требует конкретики"];
+const languageOptions = ["Только нейтральная лексика", "Допускает разговорные выражения", "При раздражении может использовать резкие слова"];
+const emotionalityOptions = ["Сдержанная", "Умеренная", "Высокая"];
+const initialPlayer: SideProfile = { name: "Александр", patronymic: "Сергеевич", side: "provider", role: "Дизайнер", goal: "Продать услуги по разработке фирменного стиля и сайта.", boundaries: boundaryOptions[4], person: "Самостоятельный дизайнер с опытом коммерческих проектов.", motivation: motivationOptions[4], character: characterOptions[0], hiddenInterest: interestOptions[3], speechStyle: speechOptions[0], habits: habitOptions[1], languageStyle: languageOptions[0], emotionality: emotionalityOptions[1] };
+const initialOpponent: SideProfile = { name: "Андрей", patronymic: "Михайлович", side: "buyer", role: "Владелец компании", goal: "Получить современный дизайн сайта в рамках бюджета и сроков.", boundaries: boundaryOptions[0], person: "Владелец небольшой компании. Раньше сталкивался со срывом сроков подрядчиком.", motivation: motivationOptions[2], character: characterOptions[1], hiddenInterest: interestOptions[4], speechStyle: speechOptions[4], habits: habitOptions[2], languageStyle: languageOptions[0], emotionality: emotionalityOptions[1] };
+const pick = <T,>(items: T[]) => items[Math.floor(Math.random() * items.length)];
+
+export default function Home() {
+  const [screen, setScreen] = useState<Screen>("home");
+  const [player, setPlayer] = useState(initialPlayer), [opponent, setOpponent] = useState(initialOpponent);
+  const [plan, setPlan] = useState<NegotiationPlan | null>(null), [preparing, setPreparing] = useState(false);
+  const [state, setState] = useState<NegotiationState>(() => createInitialState());
+  const [messages, setMessages] = useState<Message[]>([]), [draft, setDraft] = useState("");
+  const [sessionId, setSessionId] = useState<string | null>(null), [saveState, setSaveState] = useState<"local" | "saving" | "saved">("local");
+  const [thinking, setThinking] = useState(false), [aiError, setAiError] = useState("");
+  const [sessions, setSessions] = useState<SessionSummary[]>([]), [historyLoading, setHistoryLoading] = useState(false), [historyError, setHistoryError] = useState("");
+  const [rewrite, setRewrite] = useState<RewritePoint | null>(null);
+  const [branchInfo, setBranchInfo] = useState<{ parentSessionId: string | null; branchedFromTurn: number | null; correctionNumber: number }>({ parentSessionId: null, branchedFromTurn: null, correctionNumber: 0 });
+  const [report, setReport] = useState<SessionReport | null>(null), [reportLoading, setReportLoading] = useState(false);
+
+  const lastSnapshot = useMemo(() => [...messages].reverse().find((message) => message.snapshot)?.snapshot, [messages]);
+  const remaining = plan ? Math.max(0, plan.maxMessages - messages.length) : 0;
+  const sessionNames = useMemo(() => new Map(sessions.map((session) => [session.id, session.title])), [sessions]);
+
+  async function refreshHistory() {
+    setHistoryLoading(true); setHistoryError("");
+    try {
+      const loaded = await listSessions();
+      setSessions(loaded);
+      return loaded;
+    } catch {
+      setHistoryError("История пока недоступна: примените миграцию 002_session_history_and_branches.sql в Supabase.");
+      return [];
+    } finally {
+      setHistoryLoading(false);
+    }
+  }
+
+  const changePlayer = (value: SideProfile) => { setPlayer(value); setPlan(null); };
+  const changeOpponent = (value: SideProfile) => { setOpponent(value); setPlan(null); };
+  function swapSides() { setPlayer(opponent); setOpponent(player); setPlan(null); }
+  async function prepareOpponent() {
+    setPreparing(true); setAiError("");
+    try {
+      const response = await fetch("/api/plan", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ player, opponent }) });
+      const data = await response.json() as { plan?: NegotiationPlan; warning?: string; error?: string };
+      if (!response.ok || !data.plan) throw new Error(data.error ?? "Не удалось построить маршрут.");
+      setPlan(data.plan);
+      if (data.warning) setAiError(`Маршрут создан локально: ${data.warning}`);
+    } catch (error) { setAiError(error instanceof Error ? error.message : "Не удалось построить маршрут."); }
+    finally { setPreparing(false); }
+  }
+  function randomizeOpponent() {
+    setOpponent((current) => ({ ...current, character: pick(characterOptions), motivation: pick(motivationOptions), boundaries: pick(boundaryOptions), hiddenInterest: pick(interestOptions), speechStyle: pick(speechOptions), habits: pick(habitOptions), languageStyle: pick(languageOptions), emotionality: pick(emotionalityOptions) }));
+    setPlan(null);
+  }
+
+  async function startNegotiation() {
+    if (!plan) return;
+    const opening = opponent.side === "buyer"
+      ? `Здравствуйте, ${player.name} ${player.patronymic}. Я рассматриваю ваши услуги. Расскажите, что именно входит в ваше предложение?`
+      : opponent.side === "provider"
+        ? `Здравствуйте, ${player.name} ${player.patronymic}. Расскажите, какую задачу вы хотите решить, какой результат и сроки рассматриваете?`
+        : `Здравствуйте, ${player.name} ${player.patronymic}. Предлагаю обозначить позиции сторон и ожидаемый результат разговора.`;
+    const fresh = createInitialState();
+    setState(fresh); setMessages([{ role: "opponent", text: opening, turn: 0 }]); setScreen("talk"); setSaveState("saving"); setRewrite(null); setReport(null); setBranchInfo({ parentSessionId: null, branchedFromTurn: null, correctionNumber: 0 });
+    const id = await createSession(player, opponent, fresh, opening, plan);
+    setSessionId(id); setSaveState(id ? "saved" : "local");
+    if (!id) setAiError("Не удалось создать сессию в Supabase. Проверьте, применена ли новая миграция базы данных.");
+    else void refreshHistory();
+  }
+
+  function beginRewrite(message: Message) {
+    if (thinking || message.role !== "player") return;
+    setRewrite({ turn: message.turn, text: message.text });
+    setDraft(message.text);
+    setAiError("");
+  }
+
+  async function buildReport(targetState = state, targetMessages = messages, targetSessionId = sessionId) {
+    setReportLoading(true);
+    let nextReport: SessionReport = {
+      summary: "Переговоры завершены. Подробный разбор нейросети временно недоступен.",
+      agreed: targetState.memory.agreements,
+      openQuestions: targetState.memory.openQuestions,
+      interests: [],
+      mistakes: [...targetState.memory.contradictions, ...targetState.memory.threats],
+      advice: ["Проверьте открытые вопросы и сформулируйте условия точнее."],
+      risks: targetState.memory.promises,
+    };
+    try {
+      const response = await fetch("/api/report", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ player, opponent, state: targetState, messages: targetMessages }) });
+      const data = await response.json() as { report?: SessionReport; error?: string };
+      if (!response.ok || !data.report) throw new Error(data.error ?? "Отчёт не получен.");
+      nextReport = data.report;
+    } catch (error) {
+      setAiError(error instanceof Error ? error.message : "Не удалось создать подробный отчёт.");
+    }
+    setReport(nextReport); setReportLoading(false);
+    if (targetSessionId) void saveSessionReport(targetSessionId, nextReport);
+    return nextReport;
+  }
+
+  async function finishNegotiation() {
+    await buildReport();
+    setScreen("result");
+  }
+
+  async function send() {
+    const text = draft.trim();
+    if (!text || (!rewrite && state.status !== "active") || thinking || !plan) return;
+
+    let workingState = state;
+    let workingMessages = messages;
+    let activeSessionId = sessionId;
+    if (rewrite) {
+      if (!sessionId) { setAiError("Для создания ветки сначала нужна сохранённая сессия Supabase."); return; }
+      const previousSnapshot = [...messages].reverse().find((message) => message.turn < rewrite.turn && message.snapshot)?.snapshot;
+      workingState = previousSnapshot?.after ?? createInitialState();
+      workingState = { ...workingState, status: "active" };
+      workingMessages = messages.filter((message) => message.turn < rewrite.turn);
+      setThinking(true); setSaveState("saving");
+      const branch = await createBranchSession(sessionId, rewrite.turn, player, opponent, plan, workingState);
+      if (!branch?.id) {
+        setThinking(false); setSaveState("local"); setAiError(branch?.limitReached ? "Доступно не больше трёх исправлений для одной исходной сессии." : "Не удалось создать ветку. Примените миграцию 002_session_history_and_branches.sql в Supabase."); return;
+      }
+      activeSessionId = branch.id;
+      setSessionId(branch.id); setMessages(workingMessages); setState(workingState); setReport(null);
+      setBranchInfo({ parentSessionId: sessionId, branchedFromTurn: rewrite.turn, correctionNumber: branch.correctionNumber });
+      setRewrite(null);
+    }
+
+    const turn = workingState.turn + 1;
+    const nextCount = workingMessages.length + 2;
+    const nextMessages: Message[] = [...workingMessages, { role: "player", text, turn }];
+    setDraft(""); setThinking(true); setAiError(""); setMessages(nextMessages);
+    let reply = "";
+    let result: ReturnType<typeof applySemanticEvaluation> | null = null;
+    try {
+      const response = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ player, opponent, plan, state: workingState, messages: nextMessages, sessionId: activeSessionId, messageCount: nextCount }) });
+      const data = await response.json() as { reply?: string; evaluation?: SemanticEvaluation; error?: string };
+      if (!response.ok || !data.reply) throw new Error(data.error ?? "Нейросеть не ответила.");
+      if (!data.evaluation) throw new Error("Не удалось оценить ход. Реплика не сохранена.");
+      reply = data.reply;
+      result = applySemanticEvaluation(workingState, data.evaluation, plan, nextCount);
+    } catch (error) {
+      setAiError(error instanceof Error ? error.message : "Не удалось получить ответ модели.");
+      setMessages(workingMessages); setDraft(text); setThinking(false); setSaveState(activeSessionId ? "saved" : "local"); return;
+    }
+    if (!result) return;
+    const opponentMessage: Message = { role: "opponent", text: reply, turn: result.snapshot.turn, snapshot: result.snapshot };
+    setState(result.state); setMessages((current) => [...current, opponentMessage]); setThinking(false);
+    if (activeSessionId) {
+      setSaveState("saving");
+      setSaveState(await saveTurn(activeSessionId, text, reply, result.snapshot) ? "saved" : "local");
+      void refreshHistory();
+    }
+    if (result.state.status !== "active") { await buildReport(result.state, [...nextMessages, opponentMessage], activeSessionId); setScreen("result"); }
+  }
+
+  async function openSavedSession(id: string) {
+    setHistoryLoading(true); setHistoryError("");
+    const loaded = await loadSession(id);
+    setHistoryLoading(false);
+    if (!loaded) { setHistoryError("Не удалось открыть эту сессию."); return; }
+    setPlayer(loaded.player); setOpponent(loaded.opponent); setPlan(loaded.plan); setState(loaded.state); setMessages(loaded.messages); setSessionId(loaded.id);
+    setBranchInfo({ parentSessionId: loaded.parentSessionId, branchedFromTurn: loaded.branchedFromTurn, correctionNumber: loaded.correctionNumber });
+    setReport(loaded.report); setRewrite(null); setDraft(""); setAiError(""); setSaveState("saved"); setScreen("talk");
+  }
+
+  function reset() {
+    setState(createInitialState()); setMessages([]); setSessionId(null); setSaveState("local"); setAiError(""); setPlan(null); setRewrite(null); setReport(null); setBranchInfo({ parentSessionId: null, branchedFromTurn: null, correctionNumber: 0 }); setScreen("workspace");
+  }
+
+  return <div className="app-shell">
+    <header className="topbar">
+      <button className="wordmark" onClick={() => setScreen("home")}>Арена переговоров</button>
+      <div className="top-actions"><button className="nav-button" onClick={() => { setScreen("history"); void refreshHistory(); }}>История{sessions.length ? ` · ${sessions.length}` : ""}</button><span className="status">{saveState === "saved" ? "Сохранено в Supabase" : saveState === "saving" ? "Сохранение…" : "Локальный режим"}</span></div>
+    </header>
+    <main>
+      {screen === "home" && <section className="hero"><p className="kicker">Тренажёр переговоров</p><h1>Создайте оппонента и найдите путь к соглашению.</h1><p className="hero-copy">Характер, мотивация и скрытые интересы управляют поведением оппонента. Каждая попытка сохраняется, а любую реплику можно исправить в новой ветке.</p><div className="hero-actions"><button className="primary" onClick={() => setScreen("workspace")}>Начать</button><button className="quiet" onClick={() => { setScreen("history"); void refreshHistory(); }}>Открыть историю</button></div></section>}
+
+      {screen === "history" && <HistoryView sessions={sessions} loading={historyLoading} error={historyError} names={sessionNames} onOpen={(id) => void openSavedSession(id)} onNew={() => setScreen("workspace")} />}
+
+      {screen === "workspace" && <section className="workspace"><header className="workspace-head"><p className="kicker">Настройка оппонента</p><h1>Поле переговоров</h1><p>Настройте обе стороны. Перед стартом система скрытно построит последовательный маршрут к соглашению.</p></header><div className="sides"><SideCard title="Вы играете" profile={player} onChange={changePlayer} /><button className="swap" onClick={swapSides}><span>⇄</span>Поменять стороны</button><SideCard title="Оппонент" profile={opponent} onChange={changeOpponent} onRandomize={randomizeOpponent} /></div><section className="plan-card"><div><p className="kicker">Подготовка переговоров</p><h2>{plan ? "Маршрут готов" : "Постройте маршрут перед стартом"}</h2><p>{plan ? `Создано ${plan.route.length} скрытых смысловых этапов. Лимит: ${plan.maxMessages} реплик.` : "Этапы, ключевые фразы и критерии прохождения будут сформированы заранее и останутся скрытыми до завершения сессии."}</p></div><button className="quiet" onClick={() => void prepareOpponent()} disabled={preparing}>{preparing ? "Подготовка…" : plan ? "Построить заново" : "Построить скрытый маршрут"}</button></section><div className="controls"><button className="quiet" onClick={() => setScreen("home")}>Назад</button><button className="primary" onClick={startNegotiation} disabled={!plan}>Начать переговоры</button></div></section>}
+
+      {screen === "talk" && plan && <section className="negotiation"><div className="conversation"><div className="conversation-head"><div><p className="kicker">Реплика {messages.length} из {plan.maxMessages}</p><h1>{player.role}</h1></div><button className="quiet" onClick={() => void finishNegotiation()} disabled={reportLoading}>{reportLoading ? "Подготовка отчёта…" : "Завершить"}</button></div>{branchInfo.parentSessionId && <div className="branch-banner"><strong>Альтернативная ветка</strong><span>Исправление {branchInfo.correctionNumber} из 3, с хода {branchInfo.branchedFromTurn}. Исходный диалог сохранён.</span></div>}<div className="route-bar"><div><span>Путь к цели</span><strong>{state.routeProgress}%</strong></div><div className="route-track"><span style={{ width: `${state.routeProgress}%` }} /></div><small>Осталось реплик: {remaining}</small></div>{aiError && <p className="ai-error">{aiError}</p>}<div className="messages" aria-live="polite">{messages.map((message, index) => <article key={`${message.turn}-${message.role}-${index}`} className={`message ${message.role}`}><div className="message-meta"><span>{message.role === "player" ? `Вы · ход ${message.turn}` : opponent.role}</span>{message.role === "player" && sessionId && <button onClick={() => beginRewrite(message)} disabled={thinking}>Изменить отсюда</button>}</div><p>{message.text}</p>{message.role === "opponent" && message.snapshot?.nonverbalCue && <em className="nonverbal">{message.snapshot.nonverbalCue}</em>}</article>)}{thinking && <article className="message opponent thinking"><span>{opponent.role}</span><p>Формулирует ответ…</p></article>}</div>{state.status !== "active" && !rewrite && <p className="session-ended">Эта версия завершена. Выберите любую свою реплику выше и нажмите «Изменить отсюда», чтобы создать новую ветку.</p>}{rewrite && <div className="rewrite-banner"><div><strong>Создание новой ветки с хода {rewrite.turn}</strong><span>Следующие реплики будут заменены только в новой версии. Исходная история сохранится.</span></div><button type="button" onClick={() => { setRewrite(null); setDraft(""); }}>Отмена</button></div>}<form className="composer" onSubmit={(event) => { event.preventDefault(); void send(); }}><label htmlFor="reply">{rewrite ? "Исправленная реплика" : "Ваша реплика"}</label><textarea id="reply" maxLength={800} value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Задайте вопрос или предложите обмен…" disabled={thinking || (state.status !== "active" && !rewrite)} /><div><span>{draft.length}/800</span><button className="primary" disabled={!draft.trim() || thinking || (state.status !== "active" && !rewrite)}>{thinking ? "Ожидание…" : rewrite ? "Создать ветку и отправить" : "Отправить"}</button></div></form></div><aside className="state-panel"><p className="kicker">Состояние оппонента</p><Meter label="Доверие" value={state.trust} /><Meter label="Интерес" value={state.dealInterest} /><Meter label="Раздражение" value={state.irritation} inverse /><Meter label="Этичность диалога" value={state.ethicalConduct} /><Meter label="Взаимопонимание" value={100 - state.misunderstanding} /><p className="route-summary">Пройдено этапов: <strong>{state.matchedKeywords.length} из {plan.route.length}</strong></p>{lastSnapshot && <div className="last-action"><strong>Последнее действие: {lastSnapshot.actionLabel}</strong>{lastSnapshot.rationale && <span>{lastSnapshot.rationale}</span>}</div>}<h3>Память оппонента</h3><div className="memory-summary"><span>Обещания: {state.memory.promises.length}</span><span>Уступки: {state.memory.concessions.length}</span><span>Противоречия: {state.memory.contradictions.length}</span><span>Договорённости: {state.memory.agreements.length}</span></div></aside></section>}
+
+      {screen === "result" && <section className="results"><p className="kicker">Результат</p><h1>{state.status === "deal" ? "Маршрут пройден" : state.status === "walkaway" ? "Переговоры сорваны" : "Диалог завершён"}</h1><div className="result-grid"><article><span>Достижение цели</span><strong>{state.routeProgress}%</strong><p>{messages.length} реплик</p></article><div className="analysis-list"><ResultRow label="Доверие" value={state.trust} /><ResultRow label="Интерес" value={state.dealInterest} /><ResultRow label="Раздражение" value={state.irritation} /><ResultRow label="Этичность" value={state.ethicalConduct} /><ResultRow label="Взаимопонимание" value={100 - state.misunderstanding} /><ResultRow label="Смыслы" value={`${state.matchedKeywords.length}/${plan?.keywords.length ?? 0}`} /></div></div>{reportLoading && <p className="report-loading">ИИ готовит разбор переговоров…</p>}{report && <section className="session-report"><header><p className="kicker">Разбор сессии</p><h2>О чём вы договорились</h2><p>{report.summary}</p></header><div className="report-grid"><ReportBlock title="Согласовано" items={report.agreed} /><ReportBlock title="Осталось открытым" items={report.openQuestions} /><ReportBlock title="Интересы и мотивы" items={report.interests} /><ReportBlock title="Ошибки" items={report.mistakes} /><ReportBlock title="Советы тренера" items={report.advice} /><ReportBlock title="Риски" items={report.risks} /></div></section>}<div className="controls result-controls"><button className="quiet" onClick={() => setScreen("history")}>История версий</button>{messages.some((message) => message.role === "player") && branchInfo.correctionNumber < 3 && <button className="quiet" onClick={() => setScreen("talk")}>Исправить ошибку · осталось {3 - branchInfo.correctionNumber}</button>}<button className="primary" onClick={reset}>Новая попытка</button></div></section>}
+    </main>
+  </div>;
+}
+
+function HistoryView({ sessions, loading, error, names, onOpen, onNew }: { sessions: SessionSummary[]; loading: boolean; error: string; names: Map<string, string>; onOpen: (id: string) => void; onNew: () => void }) {
+  return <section className="history-view"><header className="history-head"><div><p className="kicker">Сохранённые переговоры</p><h1>История и ветки</h1><p>Основные диалоги и исправленные версии хранятся отдельно. Откройте любую версию и продолжите с её текущего состояния.</p></div><button className="primary" onClick={onNew}>Новые переговоры</button></header>{error && <p className="ai-error">{error}</p>}{loading ? <p className="history-empty">Загрузка истории…</p> : sessions.length === 0 ? <p className="history-empty">Сохранённых переговоров пока нет.</p> : <div className="history-list">{sessions.map((session) => <article className={`history-card ${session.parentSessionId ? "branch" : ""}`} key={session.id}><div className="history-card-main"><div className="history-badges"><span>{session.parentSessionId ? `Исправление ${session.correctionNumber} из 3 · ход ${session.branchedFromTurn}` : "Основная сессия"}</span><span>{session.status === "active" ? "В процессе" : session.status === "deal" ? "Сделка" : "Завершено"}</span></div><h2>{session.title}</h2><p>{session.player.name} {session.player.patronymic} ↔ {session.opponent.name} {session.opponent.patronymic}</p>{session.parentSessionId && <small>Исходная версия: {names.get(session.parentSessionId) ?? "сохранённая сессия"}</small>}</div><div className="history-card-side"><time>{new Date(session.updatedAt).toLocaleString("ru-RU", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</time><span>{session.messageCount} реплик</span><button className="quiet" onClick={() => onOpen(session.id)}>Открыть</button></div></article>)}</div>}</section>;
+}
+
+function SideCard({ title, profile, onChange, onRandomize }: { title: string; profile: SideProfile; onChange: (value: SideProfile) => void; onRandomize?: () => void }) {
+  const field = (key: keyof SideProfile, value: string) => onChange({ ...profile, [key]: value });
+  return <article className="side-card"><div className="side-card-title"><p className="kicker">{title}</p>{onRandomize && <button className="randomize" type="button" onClick={onRandomize}>Случайная личность</button>}</div><div className="name-fields"><label>Имя<input value={profile.name} onChange={(e) => field("name", e.target.value)} /></label><label>Отчество<input value={profile.patronymic} onChange={(e) => field("patronymic", e.target.value)} /></label></div><label>Сторона переговоров<select value={profile.side} onChange={(e) => field("side", e.target.value)}>{Object.entries(sideLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label>Профессия или должность<input value={profile.role} onChange={(e) => field("role", e.target.value)} placeholder="Например: маркетолог" /></label><label>Цель переговоров<textarea value={profile.goal} onChange={(e) => field("goal", e.target.value)} /></label><label>Информация о человеке<textarea value={profile.person} onChange={(e) => field("person", e.target.value)} /></label><SelectField label="Характер" value={profile.character} options={characterOptions} onChange={(value) => field("character", value)} /><SelectField label="Личная мотивация" value={profile.motivation} options={motivationOptions} onChange={(value) => field("motivation", value)} /><SelectField label="Граница решения" value={profile.boundaries} options={boundaryOptions} onChange={(value) => field("boundaries", value)} /><SelectField label="Скрытый интерес" value={profile.hiddenInterest} options={interestOptions} onChange={(value) => field("hiddenInterest", value)} />{onRandomize && <div className="behavior-fields"><SelectField label="Стиль речи" value={profile.speechStyle} options={speechOptions} onChange={(value) => field("speechStyle", value)} /><SelectField label="Речевая привычка" value={profile.habits} options={habitOptions} onChange={(value) => field("habits", value)} /><SelectField label="Лексика" value={profile.languageStyle} options={languageOptions} onChange={(value) => field("languageStyle", value)} /><SelectField label="Эмоциональность" value={profile.emotionality} options={emotionalityOptions} onChange={(value) => field("emotionality", value)} /></div>}</article>;
+}
+function SelectField({ label, value, options, onChange }: { label: string; value: string; options: string[]; onChange: (value: string) => void }) { return <label>{label}<select value={value} onChange={(event) => onChange(event.target.value)}>{options.map((option) => <option key={option}>{option}</option>)}</select></label>; }
+function Meter({ label, value, inverse = false }: { label: string; value: number; inverse?: boolean }) { return <div className="meter"><div><span>{label}</span><strong>{value}</strong></div><div className="meter-track"><span style={{ width: `${inverse ? 100 - value : value}%` }} /></div></div>; }
+function ResultRow({ label, value }: { label: string; value: string | number }) { return <div><span>{label}</span><strong>{value}</strong></div>; }
+function ReportBlock({ title, items }: { title: string; items: string[] }) { return <article><h3>{title}</h3>{items.length ? <ul>{items.map((item, index) => <li key={`${title}-${index}`}>{item}</li>)}</ul> : <p>Не выявлено.</p>}</article>; }
+
+

@@ -1,0 +1,12 @@
+create extension if not exists pgcrypto;
+create table if not exists public.negotiation_sessions (id uuid primary key default gen_random_uuid(), owner_id uuid not null default auth.uid(), created_at timestamptz not null default now(), player jsonb not null, opponent jsonb not null, current_state jsonb not null, status text not null default 'active');
+create table if not exists public.negotiation_messages (id bigint generated always as identity primary key, session_id uuid not null references public.negotiation_sessions(id) on delete cascade, turn integer not null, role text not null check (role in ('player', 'opponent')), content text not null, created_at timestamptz not null default now());
+create table if not exists public.negotiation_snapshots (id bigint generated always as identity primary key, session_id uuid not null references public.negotiation_sessions(id) on delete cascade, turn integer not null, state jsonb not null, action jsonb not null, created_at timestamptz not null default now(), unique (session_id, turn));
+alter table public.negotiation_sessions enable row level security;
+alter table public.negotiation_messages enable row level security;
+alter table public.negotiation_snapshots enable row level security;
+create policy "owners manage sessions" on public.negotiation_sessions for all to authenticated using (owner_id = auth.uid()) with check (owner_id = auth.uid());
+create policy "owners manage messages" on public.negotiation_messages for all to authenticated using (exists (select 1 from public.negotiation_sessions s where s.id = session_id and s.owner_id = auth.uid())) with check (exists (select 1 from public.negotiation_sessions s where s.id = session_id and s.owner_id = auth.uid()));
+create policy "owners manage snapshots" on public.negotiation_snapshots for all to authenticated using (exists (select 1 from public.negotiation_sessions s where s.id = session_id and s.owner_id = auth.uid())) with check (exists (select 1 from public.negotiation_sessions s where s.id = session_id and s.owner_id = auth.uid()));
+create index if not exists negotiation_messages_session_id_idx on public.negotiation_messages(session_id);
+create index if not exists negotiation_snapshots_session_id_idx on public.negotiation_snapshots(session_id);
