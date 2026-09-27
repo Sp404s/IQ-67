@@ -40,11 +40,12 @@ export type SemanticEvaluation = {
   reserveUsed: boolean;
   rationale: string;
   interpretation: string;
+  betterReply: string;
   ethicalConcern: "none" | "ambiguity" | "disrespect" | "deception" | "coercion";
   nonverbalCue: string;
   memoryUpdates: Partial<NegotiationMemory>;
 };
-export type TurnSnapshot = { turn: number; before: NegotiationState; after: NegotiationState; action: PlayerAction; actionLabel: string; rationale?: string; nonverbalCue?: string };
+export type TurnSnapshot = { turn: number; before: NegotiationState; after: NegotiationState; action: PlayerAction; actionLabel: string; rationale?: string; advice?: string; nonverbalCue?: string };
 export type SessionReport = { summary: string; agreed: string[]; openQuestions: string[]; interests: string[]; mistakes: string[]; advice: string[]; risks: string[] };
 
 export const sideLabels: Record<PartySide, string> = {
@@ -119,6 +120,7 @@ export function applySemanticEvaluation(state: NegotiationState, evaluation: Sem
     action: evaluation.action,
     actionLabel: actionLabels[evaluation.action],
     rationale: `${evaluation.rationale} Понимание оппонента: ${evaluation.interpretation}`,
+    advice: evaluation.betterReply,
     nonverbalCue: evaluation.nonverbalCue,
   };
   return { state: next, snapshot };
@@ -146,6 +148,7 @@ export function evaluateTurn(state: NegotiationState, message: string, opponent:
     reserveUsed: trade,
     rationale: "Резервная оценка по формулировке реплики.",
     interpretation: "Оппонент понял буквальный смысл реплики.",
+    betterReply: question ? "Сформулируйте один конкретный вопрос и свяжите его с целью переговоров." : "Добавьте конкретное условие, выгоду второй стороны и следующий шаг.",
     ethicalConcern: pressure ? "coercion" : "none",
     nonverbalCue: pressure ? "напрягается и выдерживает паузу" : question ? "внимательно слушает" : "сохраняет нейтральное выражение",
     memoryUpdates: { threats: pressure ? [message.slice(0, 180)] : [], openQuestions: question ? [message.slice(0, 180)] : [], concessions: trade ? [message.slice(0, 180)] : [], promises: /обеща|гарантир|обязуюсь/.test(text) ? [message.slice(0, 180)] : [] },

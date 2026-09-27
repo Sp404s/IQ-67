@@ -27,7 +27,7 @@ export type LoadedSession = {
   correctionNumber: number;
   report: SessionReport | null;
 };
-export type SessionTimeline = SessionSummary & { messages: StoredMessage[] };
+export type SessionTimeline = SessionSummary & { messages: StoredMessage[]; report: SessionReport | null; state: NegotiationState };
 
 let userPromise: Promise<ReturnType<typeof getSupabase>> | null = null;
 
@@ -107,7 +107,7 @@ export async function saveTurn(sessionId: string, playerText: string, opponentTe
     { session_id: sessionId, turn: snapshot.turn, role: "opponent", content: opponentText },
   ]);
   if (error) return false;
-  const action = { type: snapshot.action, label: snapshot.actionLabel, rationale: snapshot.rationale, before: snapshot.before, nonverbalCue: snapshot.nonverbalCue };
+  const action = { type: snapshot.action, label: snapshot.actionLabel, rationale: snapshot.rationale, advice: snapshot.advice, before: snapshot.before, nonverbalCue: snapshot.nonverbalCue };
   const results = await Promise.all([
     supabase.from("negotiation_snapshots").insert({ session_id: sessionId, turn: snapshot.turn, state: snapshot.after, action }),
     supabase.from("negotiation_sessions").update({ current_state: snapshot.after, status: snapshot.after.status, updated_at: new Date().toISOString() }).eq("id", sessionId),
@@ -153,7 +153,7 @@ export async function loadSession(sessionId: string): Promise<LoadedSession | nu
   let previous = createInitialState();
   const snapshots = new Map<number, TurnSnapshot>();
   for (const row of snapshotsResult.data ?? []) {
-    const action = (row.action ?? {}) as { type?: PlayerAction; label?: string; rationale?: string; before?: NegotiationState };
+    const action = (row.action ?? {}) as { type?: PlayerAction; label?: string; rationale?: string; advice?: string; before?: NegotiationState };
     const after = normalizeState(row.state as Partial<NegotiationState>);
     const snapshot: TurnSnapshot = {
       turn: Number(row.turn),
@@ -162,6 +162,7 @@ export async function loadSession(sessionId: string): Promise<LoadedSession | nu
       action: action.type ?? "statement",
       actionLabel: action.label ?? "позиция",
       rationale: action.rationale,
+      advice: action.advice,
       nonverbalCue: typeof (action as { nonverbalCue?: unknown }).nonverbalCue === "string" ? (action as { nonverbalCue: string }).nonverbalCue : undefined,
     };
     snapshots.set(snapshot.turn, snapshot);
@@ -187,7 +188,7 @@ export async function listSessionTimelines(): Promise<SessionTimeline[]> {
   const summaries = await listSessions();
   const loaded = await Promise.all(summaries.map(async (summary) => {
     const session = await loadSession(summary.id);
-    return session ? { ...summary, messages: session.messages } : null;
+    return session ? { ...summary, messages: session.messages, report: session.report, state: session.state } : null;
   }));
   return loaded.filter((session): session is SessionTimeline => Boolean(session));
 }

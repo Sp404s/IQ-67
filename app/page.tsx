@@ -1,11 +1,11 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { applySemanticEvaluation, createInitialState, sideLabels, type NegotiationPlan, type NegotiationState, type SemanticEvaluation, type SessionReport, type SideProfile } from "./negotiation";
 import { createBranchSession, createSession, listSessionTimelines, loadSession, saveSessionReport, saveTurn, type SessionSummary, type SessionTimeline, type StoredMessage } from "@/lib/supabase/storage";
 
-type Screen = "home" | "workspace" | "talk" | "result" | "history";
+type Screen = "home" | "workspace" | "talk" | "result" | "history" | "results" | "profile" | "settings";
 type Message = StoredMessage;
 type RewritePoint = { turn: number; text: string };
 
@@ -20,10 +20,16 @@ const emotionalityOptions = ["Сдержанная", "Умеренная", "Вы
 const initialPlayer: SideProfile = { name: "Александр", patronymic: "Сергеевич", side: "provider", role: "Дизайнер", goal: "Продать услуги по разработке фирменного стиля и сайта.", boundaries: boundaryOptions[4], person: "Самостоятельный дизайнер с опытом коммерческих проектов.", motivation: motivationOptions[4], character: characterOptions[0], hiddenInterest: interestOptions[3], speechStyle: speechOptions[0], habits: habitOptions[1], languageStyle: languageOptions[0], emotionality: emotionalityOptions[1] };
 const initialOpponent: SideProfile = { name: "Андрей", patronymic: "Михайлович", side: "buyer", role: "Владелец компании", goal: "Получить современный дизайн сайта в рамках бюджета и сроков.", boundaries: boundaryOptions[0], person: "Владелец небольшой компании. Раньше сталкивался со срывом сроков подрядчиком.", motivation: motivationOptions[2], character: characterOptions[1], hiddenInterest: interestOptions[4], speechStyle: speechOptions[4], habits: habitOptions[2], languageStyle: languageOptions[0], emotionality: emotionalityOptions[1] };
 const pick = <T,>(items: T[]) => items[Math.floor(Math.random() * items.length)];
+function storedPlayerProfile() {
+  if (typeof window === "undefined") return initialPlayer;
+  try { const stored = window.localStorage.getItem("negotiation-player-profile"); return stored ? { ...initialPlayer, ...JSON.parse(stored) as SideProfile } : initialPlayer; }
+  catch { return initialPlayer; }
+}
 
 export default function Home() {
   const [screen, setScreen] = useState<Screen>("home");
-  const [player, setPlayer] = useState(initialPlayer), [opponent, setOpponent] = useState(initialOpponent);
+  const [profile, setProfile] = useState<SideProfile>(storedPlayerProfile);
+  const [player, setPlayer] = useState<SideProfile>(storedPlayerProfile), [opponent, setOpponent] = useState(initialOpponent);
   const [plan, setPlan] = useState<NegotiationPlan | null>(null), [preparing, setPreparing] = useState(false);
   const [state, setState] = useState<NegotiationState>(() => createInitialState());
   const [messages, setMessages] = useState<Message[]>([]), [draft, setDraft] = useState("");
@@ -38,6 +44,10 @@ export default function Home() {
   const lastSnapshot = useMemo(() => [...messages].reverse().find((message) => message.snapshot)?.snapshot, [messages]);
   const remaining = plan ? Math.max(0, plan.maxMessages - messages.length) : 0;
   const sessionNames = useMemo(() => new Map(sessions.map((session) => [session.id, session.title])), [sessions]);
+
+  useEffect(() => {
+    window.localStorage.setItem("negotiation-player-profile", JSON.stringify(profile));
+  }, [profile]);
 
   async function refreshHistory() {
     setHistoryLoading(true); setHistoryError("");
@@ -200,27 +210,44 @@ export default function Home() {
     setReport(null); setRewrite({ turn: rewriteTurn, text: selected.role === "player" ? selected.text : "" }); setDraft(selected.role === "player" ? selected.text : ""); setAiError(""); setSaveState("saved"); setScreen("talk");
   }
 
+  async function openResult(id: string) {
+    setHistoryLoading(true);
+    const loaded = await loadSession(id);
+    setHistoryLoading(false);
+    if (!loaded) { setHistoryError("Не удалось открыть результат сессии."); return; }
+    setPlayer(loaded.player); setOpponent(loaded.opponent); setPlan(loaded.plan); setState(loaded.state); setMessages(loaded.messages); setSessionId(loaded.id); setReport(loaded.report);
+    setBranchInfo({ parentSessionId: loaded.parentSessionId, branchedFromTurn: loaded.branchedFromTurn, correctionNumber: loaded.correctionNumber });
+    setScreen(loaded.report ? "result" : "talk");
+  }
+
   function reset() {
-    setState(createInitialState()); setMessages([]); setSessionId(null); setSaveState("local"); setAiError(""); setPlan(null); setRewrite(null); setReport(null); setBranchInfo({ parentSessionId: null, branchedFromTurn: null, correctionNumber: 0 }); setScreen("workspace");
+    setPlayer(profile); setState(createInitialState()); setMessages([]); setSessionId(null); setSaveState("local"); setAiError(""); setPlan(null); setRewrite(null); setReport(null); setBranchInfo({ parentSessionId: null, branchedFromTurn: null, correctionNumber: 0 }); setScreen("workspace");
   }
 
   return <div className="app-shell">
     <nav className="side-nav" aria-label="Основная навигация">
-      <button className={`icon-button ${screen === "home" ? "active" : ""}`} data-tooltip="Главная" aria-label="Главная" onClick={() => setScreen("home")}><AppIcon name="home" /></button>
-      <button className={`icon-button ${screen === "workspace" ? "active" : ""}`} data-tooltip="Новые переговоры" aria-label="Новые переговоры" onClick={() => setScreen("workspace")}><AppIcon name="spark" /></button>
-      <button className={`icon-button ${screen === "talk" ? "active" : ""}`} data-tooltip="Текущий диалог" aria-label="Текущий диалог" disabled={!plan} onClick={() => plan && setScreen("talk")}><AppIcon name="chat" /></button>
-      <button className={`icon-button ${screen === "history" ? "active" : ""}`} data-tooltip="История" aria-label="История" onClick={() => { setScreen("history"); void refreshHistory(); }}><AppIcon name="history" /></button>
+      <button className={`icon-button ${screen === "home" || screen === "talk" ? "active" : ""}`} data-tooltip="Главная · диалог" aria-label="Главная · диалог" onClick={() => setScreen(plan ? "talk" : "home")}><AppIcon name="home" /></button>
+      <button className={`icon-button ${screen === "history" ? "active" : ""}`} data-tooltip="История диалога" aria-label="История диалога" onClick={() => { setScreen("history"); void refreshHistory(); }}><AppIcon name="history" /></button>
+      <button className={`icon-button ${screen === "workspace" ? "active" : ""}`} data-tooltip="Новые переговоры" aria-label="Новые переговоры" onClick={reset}><AppIcon name="spark" /></button>
+      <button className={`icon-button ${screen === "results" || screen === "result" ? "active" : ""}`} data-tooltip="Результаты" aria-label="Результаты" onClick={() => { setScreen("results"); void refreshHistory(); }}><AppIcon name="chart" /></button>
       <span className="nav-spacer" />
-      <button className={`icon-button ${screen === "result" ? "active" : ""}`} data-tooltip="Результаты" aria-label="Результаты" disabled={!report} onClick={() => report && setScreen("result")}><AppIcon name="chart" /></button>
+      <button className={`icon-button ${screen === "profile" ? "active" : ""}`} data-tooltip="Профиль" aria-label="Профиль" onClick={() => setScreen("profile")}><AppIcon name="profile" /></button>
+      <button className={`icon-button ${screen === "settings" ? "active" : ""}`} data-tooltip="Настройки" aria-label="Настройки" onClick={() => setScreen("settings")}><AppIcon name="settings" /></button>
     </nav>
     <header className="topbar">
-      <button className="wordmark" onClick={() => setScreen("home")}>Арена переговоров</button>
-      <div className="top-actions"><button className="nav-button" onClick={() => { setScreen("history"); void refreshHistory(); }}>История{sessions.length ? ` · ${sessions.length}` : ""}</button><span className="status">{saveState === "saved" ? "Сохранено в Supabase" : saveState === "saving" ? "Сохранение…" : "Локальный режим"}</span></div>
+      <button className="wordmark" onClick={() => setScreen(plan ? "talk" : "home")}>Арена переговоров</button>
+      <div className="top-actions"><span className="status">{saveState === "saved" ? "Сохранено в Supabase" : saveState === "saving" ? "Сохранение…" : "Локальный режим"}</span></div>
     </header>
     <main>
-      {screen === "home" && <section className="hero"><p className="kicker">Тренажёр переговоров</p><h1>Создайте оппонента и найдите путь к соглашению.</h1><p className="hero-copy">Характер, мотивация и скрытые интересы управляют поведением оппонента. Каждая попытка сохраняется, а любую реплику можно исправить в новой ветке.</p><div className="hero-actions"><button className="primary" onClick={() => setScreen("workspace")}>Начать</button><button className="quiet" onClick={() => { setScreen("history"); void refreshHistory(); }}>Открыть историю</button></div></section>}
+      {screen === "home" && <section className="hero dialogue-empty"><p className="kicker">Главная · диалог</p><h1>Здесь появятся ваши переговоры.</h1><p className="hero-copy">Создайте новую сессию, выберите оппонента и начните разговор. После старта главная страница всегда возвращает вас к текущему диалогу.</p><div className="hero-actions"><button className="primary" onClick={reset}>Новые переговоры</button><button className="quiet" onClick={() => { setScreen("history"); void refreshHistory(); }}>Открыть доску истории</button></div></section>}
 
-      {screen === "history" && <HistoryView timelines={timelines} loading={historyLoading} error={historyError} names={sessionNames} onOpen={(id) => void openSavedSession(id)} onPoint={(id, message) => void openHistoryPoint(id, message)} onNew={() => setScreen("workspace")} />}
+      {screen === "history" && <HistoryView timelines={timelines} loading={historyLoading} error={historyError} names={sessionNames} onOpen={(id) => void openSavedSession(id)} onPoint={(id, message) => void openHistoryPoint(id, message)} onNew={reset} />}
+
+      {screen === "results" && <ResultsArchive timelines={timelines} loading={historyLoading} onOpen={(id) => void openResult(id)} onNew={reset} />}
+
+      {screen === "profile" && <section className="profile-view"><header><p className="kicker">Ваши данные</p><h1>Профиль переговорщика</h1><p>Эти сведения сохраняются в браузере и автоматически подставляются в новые переговоры.</p></header><SideCard title="Ваш профиль" profile={profile} onChange={setProfile} defaultExpanded /><p className="profile-saved">Изменения сохраняются автоматически.</p></section>}
+
+      {screen === "settings" && <section className="settings-view"><p className="kicker">Сервис</p><h1>Настройки</h1><div className="settings-grid"><article><AppIcon name="spark" /><div><strong>Нейросеть</strong><p>Gemini анализирует реплики, создаёт оппонента и предлагает более сильные формулировки.</p></div></article><article><AppIcon name="history" /><div><strong>Хранение данных</strong><p>Сессии, сообщения и снимки состояния автоматически удаляются через 7 дней.</p></div></article><article><AppIcon name="profile" /><div><strong>Профиль</strong><p>Ваши данные сохраняются только в этом браузере и используются для новых сессий.</p></div></article></div></section>}
 
       {screen === "workspace" && <section className="workspace"><header className="workspace-head"><p className="kicker">Настройка оппонента</p><h1>Поле переговоров</h1><p>Настройте обе стороны. Перед стартом система скрытно построит последовательный маршрут к соглашению.</p></header><div className="sides"><SideCard title="Вы играете" profile={player} onChange={changePlayer} /><button className="swap" onClick={swapSides}><span>⇄</span>Поменять стороны</button><SideCard title="Оппонент" profile={opponent} onChange={changeOpponent} onRandomize={randomizeOpponent} /></div><section className="plan-card"><div><p className="kicker">Подготовка переговоров</p><h2>{plan ? "Маршрут готов" : "Постройте маршрут перед стартом"}</h2><p>{plan ? `Создано ${plan.route.length} скрытых смысловых этапов. Лимит: ${plan.maxMessages} реплик.` : "Этапы, ключевые фразы и критерии прохождения будут сформированы заранее и останутся скрытыми до завершения сессии."}</p></div><button className="quiet" onClick={() => void prepareOpponent()} disabled={preparing}>{preparing ? "Подготовка…" : plan ? "Построить заново" : "Построить скрытый маршрут"}</button></section><div className="controls"><button className="quiet" onClick={() => setScreen("home")}>Назад</button><button className="primary" onClick={startNegotiation} disabled={!plan}>Начать переговоры</button></div></section>}
 
@@ -233,6 +260,9 @@ export default function Home() {
 
 function HistoryView({ timelines, loading, error, names, onOpen, onPoint, onNew }: { timelines: SessionTimeline[]; loading: boolean; error: string; names: Map<string, string>; onOpen: (id: string) => void; onPoint: (id: string, message: StoredMessage) => void; onNew: () => void }) {
   const [query, setQuery] = useState("");
+  const [scale, setScale] = useState(0.9);
+  const [offset, setOffset] = useState({ x: 34, y: 34 });
+  const drag = useRef<{ x: number; y: number; originX: number; originY: number } | null>(null);
   const normalizedQuery = query.trim().toLocaleLowerCase("ru-RU");
   const depthOf = (session: SessionTimeline) => {
     let depth = 0, parent = session.parentSessionId;
@@ -242,16 +272,22 @@ function HistoryView({ timelines, loading, error, names, onOpen, onPoint, onNew 
   };
   const visible = timelines.filter((session) => !normalizedQuery || session.title.toLocaleLowerCase("ru-RU").includes(normalizedQuery) || session.messages.some((message) => message.text.toLocaleLowerCase("ru-RU").includes(normalizedQuery)));
   const matchCount = normalizedQuery ? visible.reduce((count, session) => count + session.messages.filter((message) => message.text.toLocaleLowerCase("ru-RU").includes(normalizedQuery)).length, 0) : 0;
-  return <section className="history-view"><header className="history-head"><div><p className="kicker">Карта переговоров</p><h1>Дерево диалогов</h1><p>Каждая точка хранит реплику и состояние оппонента на этом ходе. Найдите нужное место и создайте альтернативную ветку — доступно до трёх исправлений.</p></div><button className="primary" onClick={onNew}>Новые переговоры</button></header><div className="tree-search"><AppIcon name="chat" /><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Найти слово или фразу во всех диалогах" aria-label="Поиск по истории диалогов" />{normalizedQuery && <span>{matchCount} совпад.</span>}</div>{error && <p className="ai-error">{error}</p>}{loading ? <p className="history-empty">Загрузка дерева…</p> : visible.length === 0 ? <p className="history-empty">{normalizedQuery ? "Совпадений не найдено." : "Сохранённых переговоров пока нет."}</p> : <div className="dialogue-tree">{visible.map((session) => { const depth = depthOf(session); return <article className={`tree-branch depth-${depth}`} key={session.id}><div className="branch-line" /><header className="tree-branch-head"><div><div className="history-badges"><span>{session.parentSessionId ? `Ветка ${session.correctionNumber} из 3 · после хода ${session.branchedFromTurn}` : "Основная линия"}</span><span>{session.status === "active" ? "В процессе" : session.status === "deal" ? "Сделка" : "Завершено"}</span></div><h2>{session.title}</h2><p>{session.player.name} {session.player.patronymic} ↔ {session.opponent.name} {session.opponent.patronymic}</p>{session.parentSessionId && <small>Ответвление от: {names.get(session.parentSessionId) ?? "предыдущая версия"}</small>}</div><button className="quiet" onClick={() => onOpen(session.id)}>Открыть полностью</button></header><div className="turn-nodes">{session.messages.map((message, index) => { const matched = normalizedQuery && message.text.toLocaleLowerCase("ru-RU").includes(normalizedQuery); const snapshot = message.snapshot; return <button className={`turn-node ${message.role} ${matched ? "match" : ""}`} key={`${session.id}-${message.turn}-${message.role}-${index}`} onClick={() => onPoint(session.id, message)} title="Вернуться к этой точке"><span className="node-dot"><AppIcon name={message.role === "player" ? "chat" : "spark"} /></span><span className="node-copy"><small>{message.role === "player" ? `Вы · ход ${message.turn}` : `${session.opponent.role} · ход ${message.turn}`}</small><strong>{message.text}</strong>{snapshot && <em>Доверие {snapshot.after.trust} · Интерес {snapshot.after.dealInterest} · Раздражение {snapshot.after.irritation}</em>}</span></button>; })}</div></article>; })}</div>}</section>;
+  const resetBoard = () => { setScale(0.9); setOffset({ x: 34, y: 34 }); };
+  return <section className="history-view board-view"><header className="history-head"><div><p className="kicker">Карта переговоров</p><h1>Доска диалогов</h1><p>Перемещайте доску, меняйте масштаб и исследуйте ветки. Наведите курсор на свою реплику, чтобы увидеть совет нейросети.</p></div><button className="primary" onClick={onNew}>Новые переговоры</button></header><div className="board-toolbar"><div className="tree-search"><AppIcon name="chat" /><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Найти слово или фразу" aria-label="Поиск по истории диалогов" />{normalizedQuery && <span>{matchCount} совпад.</span>}</div><div className="zoom-controls"><button onClick={() => setScale((value) => Math.max(.5, value - .1))} aria-label="Уменьшить масштаб">−</button><span>{Math.round(scale * 100)}%</span><button onClick={() => setScale((value) => Math.min(1.4, value + .1))} aria-label="Увеличить масштаб">+</button><button onClick={resetBoard}>По центру</button></div></div>{error && <p className="ai-error">{error}</p>}{loading ? <p className="history-empty">Загрузка дерева…</p> : visible.length === 0 ? <p className="history-empty">{normalizedQuery ? "Совпадений не найдено." : "Сохранённых переговоров пока нет."}</p> : <div className="dialogue-board" onPointerDown={(event) => { if ((event.target as HTMLElement).closest("button,input")) return; drag.current = { x: event.clientX, y: event.clientY, originX: offset.x, originY: offset.y }; event.currentTarget.setPointerCapture(event.pointerId); }} onPointerMove={(event) => { if (!drag.current) return; setOffset({ x: drag.current.originX + event.clientX - drag.current.x, y: drag.current.originY + event.clientY - drag.current.y }); }} onPointerUp={() => { drag.current = null; }} onPointerCancel={() => { drag.current = null; }}><div className="board-stage" style={{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})` }}>{visible.map((session) => { const depth = depthOf(session); return <article className={`tree-branch depth-${depth}`} key={session.id}><div className="branch-line" /><header className="tree-branch-head"><div><div className="history-badges"><span>{session.parentSessionId ? `Ветка ${session.correctionNumber} из 3 · после хода ${session.branchedFromTurn}` : "Основная линия"}</span><span>{session.status === "active" ? "В процессе" : session.status === "deal" ? "Сделка" : "Завершено"}</span></div><h2>{session.title}</h2><p>{session.player.name} {session.player.patronymic} ↔ {session.opponent.name} {session.opponent.patronymic}</p>{session.parentSessionId && <small>Ответвление от: {names.get(session.parentSessionId) ?? "предыдущая версия"}</small>}</div><button className="quiet" onClick={() => onOpen(session.id)}>Открыть</button></header><div className="turn-nodes">{session.messages.map((message, index) => { const matched = normalizedQuery && message.text.toLocaleLowerCase("ru-RU").includes(normalizedQuery); const snapshot = message.snapshot; const advice = message.role === "player" ? snapshot?.advice : undefined; return <button className={`turn-node ${message.role} ${matched ? "match" : ""} ${advice ? "has-advice" : ""}`} key={`${session.id}-${message.turn}-${message.role}-${index}`} onClick={() => onPoint(session.id, message)}><span className="node-dot"><AppIcon name={message.role === "player" ? "chat" : "spark"} /></span><span className="node-copy"><small>{message.role === "player" ? `Вы · ход ${message.turn}` : `${session.opponent.role} · ход ${message.turn}`}</small><strong>{message.text}</strong>{snapshot && <em>Доверие {snapshot.after.trust} · Интерес {snapshot.after.dealInterest} · Раздражение {snapshot.after.irritation}</em>}</span>{advice && <span className="advice-popover"><small>Совет нейросети</small><strong>{advice}</strong></span>}</button>; })}</div></article>; })}</div></div>}</section>;
 }
 
-function SideCard({ title, profile, onChange, onRandomize }: { title: string; profile: SideProfile; onChange: (value: SideProfile) => void; onRandomize?: () => void }) {
-  const [expanded, setExpanded] = useState(false);
+function ResultsArchive({ timelines, loading, onOpen, onNew }: { timelines: SessionTimeline[]; loading: boolean; onOpen: (id: string) => void; onNew: () => void }) {
+  const completed = timelines.filter((session) => session.report || session.status !== "active");
+  return <section className="results-archive"><header className="history-head"><div><p className="kicker">Архив</p><h1>Результаты переговоров</h1><p>Каждый завершённый разговор хранится отдельно: участники, итог, прогресс и рекомендации тренера.</p></div><button className="primary" onClick={onNew}>Новые переговоры</button></header>{loading ? <p className="history-empty">Загрузка результатов…</p> : completed.length === 0 ? <p className="history-empty">Завершённых переговоров пока нет.</p> : <div className="results-list">{completed.map((session, index) => <button className="result-session-card" key={session.id} onClick={() => onOpen(session.id)}><span className="result-number">{String(index + 1).padStart(2, "0")}</span><span className="result-parties"><small>{new Date(session.updatedAt).toLocaleDateString("ru-RU")}</small><strong>{session.player.name} {session.player.patronymic} · {session.player.role}</strong><em>с {session.opponent.name} {session.opponent.patronymic} · {session.opponent.role}</em><p>{session.report?.summary ?? "Сессия завершена без итогового отчёта."}</p></span><span className="result-score"><strong>{session.state.routeProgress}%</strong><small>цель</small></span></button>)}</div>}</section>;
+}
+
+function SideCard({ title, profile, onChange, onRandomize, defaultExpanded = false }: { title: string; profile: SideProfile; onChange: (value: SideProfile) => void; onRandomize?: () => void; defaultExpanded?: boolean }) {
+  const [expanded, setExpanded] = useState(defaultExpanded);
   const field = (key: keyof SideProfile, value: string) => onChange({ ...profile, [key]: value });
   return <article className={`side-card ${expanded ? "expanded" : "collapsed"}`}><div className="side-card-title"><button className="side-card-toggle" type="button" onClick={() => setExpanded((value) => !value)} aria-expanded={expanded}><span><small>{title}</small><strong>{profile.name} {profile.patronymic}</strong><em>{profile.role}</em></span><b aria-hidden="true">⌄</b></button>{onRandomize && expanded && <button className="randomize" type="button" onClick={onRandomize}>Случайная личность</button>}</div>{expanded && <div className="side-card-body"><div className="name-fields"><label>Имя<input value={profile.name} onChange={(e) => field("name", e.target.value)} /></label><label>Отчество<input value={profile.patronymic} onChange={(e) => field("patronymic", e.target.value)} /></label></div><label>Сторона переговоров<select value={profile.side} onChange={(e) => field("side", e.target.value)}>{Object.entries(sideLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label>Профессия или должность<input value={profile.role} onChange={(e) => field("role", e.target.value)} placeholder="Например: маркетолог" /></label><label>Цель переговоров<textarea value={profile.goal} onChange={(e) => field("goal", e.target.value)} /></label><label>Информация о человеке<textarea value={profile.person} onChange={(e) => field("person", e.target.value)} /></label><SelectField label="Характер" value={profile.character} options={characterOptions} onChange={(value) => field("character", value)} /><SelectField label="Личная мотивация" value={profile.motivation} options={motivationOptions} onChange={(value) => field("motivation", value)} /><SelectField label="Граница решения" value={profile.boundaries} options={boundaryOptions} onChange={(value) => field("boundaries", value)} /><SelectField label="Скрытый интерес" value={profile.hiddenInterest} options={interestOptions} onChange={(value) => field("hiddenInterest", value)} />{onRandomize && <div className="behavior-fields"><SelectField label="Стиль речи" value={profile.speechStyle} options={speechOptions} onChange={(value) => field("speechStyle", value)} /><SelectField label="Речевая привычка" value={profile.habits} options={habitOptions} onChange={(value) => field("habits", value)} /><SelectField label="Лексика" value={profile.languageStyle} options={languageOptions} onChange={(value) => field("languageStyle", value)} /><SelectField label="Эмоциональность" value={profile.emotionality} options={emotionalityOptions} onChange={(value) => field("emotionality", value)} /></div>}</div>}</article>;
 }
 function SelectField({ label, value, options, onChange }: { label: string; value: string; options: string[]; onChange: (value: string) => void }) { return <label>{label}<select value={value} onChange={(event) => onChange(event.target.value)}>{options.map((option) => <option key={option}>{option}</option>)}</select></label>; }
-type AppIconName = "home" | "spark" | "chat" | "history" | "chart" | "trust" | "interest" | "irritation" | "ethics" | "understanding";
+type AppIconName = "home" | "spark" | "chat" | "history" | "chart" | "profile" | "settings" | "trust" | "interest" | "irritation" | "ethics" | "understanding";
 function AppIcon({ name }: { name: AppIconName }) {
   const paths: Record<AppIconName, ReactNode> = {
     home: <><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10.5V20h13v-9.5"/></>,
@@ -259,6 +295,8 @@ function AppIcon({ name }: { name: AppIconName }) {
     chat: <><path d="M4 5.5h16v11H9l-5 3v-14Z"/><path d="M8 10h8M8 13h5"/></>,
     history: <><path d="M4 5v5h5"/><path d="M5.6 17.5A8 8 0 1 0 4 10"/><path d="M12 7v5l3 2"/></>,
     chart: <><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></>,
+    profile: <><circle cx="12" cy="8" r="4"/><path d="M4.5 21a7.5 7.5 0 0 1 15 0"/></>,
+    settings: <><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3A1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/></>,
     trust: <><path d="M12 21s-8-4.8-8-11a4.5 4.5 0 0 1 8-2.8A4.5 4.5 0 0 1 20 10c0 6.2-8 11-8 11Z"/></>,
     interest: <><circle cx="12" cy="12" r="3"/><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"/></>,
     irritation: <><path d="M13 2 5 13h6l-1 9 9-13h-6V2Z"/></>,
