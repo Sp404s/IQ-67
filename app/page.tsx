@@ -2,8 +2,11 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import type { User } from "@supabase/supabase-js";
 import { applySemanticEvaluation, createInitialState, sideLabels, type NegotiationPlan, type NegotiationState, type SemanticEvaluation, type SessionReport, type SideProfile } from "./negotiation";
 import { createBranchSession, createSession, listSessionTimelines, loadSession, saveSessionReport, saveTurn, type SessionSummary, type SessionTimeline, type StoredMessage } from "@/lib/supabase/storage";
+import { getAccount, saveAccountProfile, signIn, signOut, signUp } from "@/lib/supabase/account";
+import { getSupabase } from "@/lib/supabase/client";
 
 type Screen = "home" | "workspace" | "talk" | "result" | "history" | "results" | "profile" | "settings";
 type Message = StoredMessage;
@@ -27,6 +30,10 @@ function storedPlayerProfile() {
 }
 
 export default function Home() {
+  const [accountUser, setAccountUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [profileReady, setProfileReady] = useState(false);
+  const [profileSaveState, setProfileSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [screen, setScreen] = useState<Screen>("home");
   const [profile, setProfile] = useState<SideProfile>(storedPlayerProfile);
   const [player, setPlayer] = useState<SideProfile>(storedPlayerProfile), [opponent, setOpponent] = useState(initialOpponent);
@@ -46,8 +53,32 @@ export default function Home() {
   const sessionNames = useMemo(() => new Map(sessions.map((session) => [session.id, session.title])), [sessions]);
 
   useEffect(() => {
+    let active = true;
+    const hydrateAccount = async () => {
+      const account = await getAccount();
+      if (!active) return;
+      setAccountUser(account?.user ?? null);
+      if (account?.profile) {
+        const loaded = { ...initialPlayer, ...account.profile };
+        setProfile(loaded); setPlayer(loaded);
+      }
+      setProfileReady(Boolean(account?.user));
+      setAuthLoading(false);
+    };
+    void hydrateAccount();
+    const listener = getSupabase()?.auth.onAuthStateChange(() => { void hydrateAccount(); });
+    return () => { active = false; listener?.data.subscription.unsubscribe(); };
+  }, []);
+
+  useEffect(() => {
     window.localStorage.setItem("negotiation-player-profile", JSON.stringify(profile));
-  }, [profile]);
+    if (!accountUser || !profileReady) return;
+    const timeout = window.setTimeout(async () => {
+      const result = await saveAccountProfile(profile);
+      setProfileSaveState(result.error ? "error" : "saved");
+    }, 500);
+    return () => window.clearTimeout(timeout);
+  }, [profile, accountUser, profileReady]);
 
   async function refreshHistory() {
     setHistoryLoading(true); setHistoryError("");
@@ -66,6 +97,7 @@ export default function Home() {
 
   const changePlayer = (value: SideProfile) => { setPlayer(value); setPlan(null); };
   const changeOpponent = (value: SideProfile) => { setOpponent(value); setPlan(null); };
+  const changeProfile = (value: SideProfile) => { setProfileSaveState("saving"); setProfile(value); };
   function swapSides() { setPlayer(opponent); setOpponent(player); setPlan(null); }
   async function prepareOpponent() {
     setPreparing(true); setAiError("");
@@ -224,6 +256,9 @@ export default function Home() {
     setPlayer(profile); setState(createInitialState()); setMessages([]); setSessionId(null); setSaveState("local"); setAiError(""); setPlan(null); setRewrite(null); setReport(null); setBranchInfo({ parentSessionId: null, branchedFromTurn: null, correctionNumber: 0 }); setScreen("workspace");
   }
 
+  if (authLoading) return <div className="auth-shell"><p>Проверяем аккаунт…</p></div>;
+  if (!accountUser) return <AuthScreen />;
+
   return <div className="app-shell">
     <nav className="side-nav" aria-label="Основная навигация">
       <button className={`icon-button ${screen === "home" || screen === "talk" ? "active" : ""}`} data-tooltip="Главная · диалог" aria-label="Главная · диалог" onClick={() => setScreen(plan ? "talk" : "home")}><AppIcon name="home" /></button>
@@ -236,7 +271,7 @@ export default function Home() {
     </nav>
     <header className="topbar">
       <button className="wordmark" onClick={() => setScreen(plan ? "talk" : "home")}>Арена переговоров</button>
-      <div className="top-actions"><span className="status">{saveState === "saved" ? "Сохранено в Supabase" : saveState === "saving" ? "Сохранение…" : "Локальный режим"}</span></div>
+      <div className="top-actions"><span className="account-email">{accountUser.email}</span><span className="status">{saveState === "saved" ? "Сохранено в Supabase" : saveState === "saving" ? "Сохранение…" : "Готово"}</span></div>
     </header>
     <main>
       {screen === "home" && <section className="hero dialogue-empty"><p className="kicker">Главная · диалог</p><h1>Здесь появятся ваши переговоры.</h1><p className="hero-copy">Создайте новую сессию, выберите оппонента и начните разговор. После старта главная страница всегда возвращает вас к текущему диалогу.</p><div className="hero-actions"><button className="primary" onClick={reset}>Новые переговоры</button><button className="quiet" onClick={() => { setScreen("history"); void refreshHistory(); }}>Открыть доску истории</button></div></section>}
@@ -245,9 +280,9 @@ export default function Home() {
 
       {screen === "results" && <ResultsArchive timelines={timelines} loading={historyLoading} onOpen={(id) => void openResult(id)} onNew={reset} />}
 
-      {screen === "profile" && <section className="profile-view"><header><p className="kicker">Ваши данные</p><h1>Профиль переговорщика</h1><p>Эти сведения сохраняются в браузере и автоматически подставляются в новые переговоры.</p></header><SideCard title="Ваш профиль" profile={profile} onChange={setProfile} defaultExpanded /><p className="profile-saved">Изменения сохраняются автоматически.</p></section>}
+      {screen === "profile" && <section className="profile-view"><header><p className="kicker">Ваши данные</p><h1>Профиль переговорщика</h1><p>Профиль привязан к аккаунту и автоматически подставляется в новые переговоры на любом устройстве.</p></header><SideCard title="Ваш профиль" profile={profile} onChange={changeProfile} defaultExpanded /><p className={`profile-saved ${profileSaveState === "error" ? "error" : ""}`}>{profileSaveState === "saving" ? "Сохраняем…" : profileSaveState === "error" ? "Не удалось сохранить профиль." : "Профиль сохранён в Supabase."}</p></section>}
 
-      {screen === "settings" && <section className="settings-view"><p className="kicker">Сервис</p><h1>Настройки</h1><div className="settings-grid"><article><AppIcon name="spark" /><div><strong>Нейросеть</strong><p>Gemini анализирует реплики, создаёт оппонента и предлагает более сильные формулировки.</p></div></article><article><AppIcon name="history" /><div><strong>Хранение данных</strong><p>Сессии, сообщения и снимки состояния автоматически удаляются через 7 дней.</p></div></article><article><AppIcon name="profile" /><div><strong>Профиль</strong><p>Ваши данные сохраняются только в этом браузере и используются для новых сессий.</p></div></article></div></section>}
+      {screen === "settings" && <section className="settings-view"><p className="kicker">Сервис</p><h1>Настройки</h1><div className="settings-grid"><article><AppIcon name="spark" /><div><strong>Нейросеть</strong><p>Gemini анализирует реплики, создаёт оппонента и предлагает более сильные формулировки.</p></div></article><article><AppIcon name="history" /><div><strong>Хранение данных</strong><p>Сессии, сообщения и снимки состояния автоматически удаляются через 7 дней.</p></div></article><article><AppIcon name="profile" /><div><strong>Аккаунт</strong><p>{accountUser.email}. Профиль и история доступны только этому пользователю.</p><button className="text-action" onClick={() => void signOut()}>Выйти из аккаунта</button></div></article></div></section>}
 
       {screen === "workspace" && <section className="workspace"><header className="workspace-head"><p className="kicker">Настройка оппонента</p><h1>Поле переговоров</h1><p>Настройте обе стороны. Перед стартом система скрытно построит последовательный маршрут к соглашению.</p></header><div className="sides"><SideCard title="Вы играете" profile={player} onChange={changePlayer} /><button className="swap" onClick={swapSides}><span>⇄</span>Поменять стороны</button><SideCard title="Оппонент" profile={opponent} onChange={changeOpponent} onRandomize={randomizeOpponent} /></div><section className="plan-card"><div><p className="kicker">Подготовка переговоров</p><h2>{plan ? "Маршрут готов" : "Постройте маршрут перед стартом"}</h2><p>{plan ? `Создано ${plan.route.length} скрытых смысловых этапов. Лимит: ${plan.maxMessages} реплик.` : "Этапы, ключевые фразы и критерии прохождения будут сформированы заранее и останутся скрытыми до завершения сессии."}</p></div><button className="quiet" onClick={() => void prepareOpponent()} disabled={preparing}>{preparing ? "Подготовка…" : plan ? "Построить заново" : "Построить скрытый маршрут"}</button></section><div className="controls"><button className="quiet" onClick={() => setScreen("home")}>Назад</button><button className="primary" onClick={startNegotiation} disabled={!plan}>Начать переговоры</button></div></section>}
 
@@ -256,6 +291,33 @@ export default function Home() {
       {screen === "result" && <section className="results"><p className="kicker">Результат</p><h1>{state.status === "deal" ? "Маршрут пройден" : state.status === "walkaway" ? "Переговоры сорваны" : "Диалог завершён"}</h1><div className="result-grid"><article><span>Достижение цели</span><strong>{state.routeProgress}%</strong><p>{messages.length} реплик</p></article><div className="analysis-list"><ResultRow label="Доверие" value={state.trust} /><ResultRow label="Интерес" value={state.dealInterest} /><ResultRow label="Раздражение" value={state.irritation} /><ResultRow label="Этичность" value={state.ethicalConduct} /><ResultRow label="Взаимопонимание" value={100 - state.misunderstanding} /><ResultRow label="Смыслы" value={`${state.matchedKeywords.length}/${plan?.keywords.length ?? 0}`} /></div></div>{reportLoading && <p className="report-loading">ИИ готовит разбор переговоров…</p>}{report && <section className="session-report"><header><p className="kicker">Разбор сессии</p><h2>О чём вы договорились</h2><p>{report.summary}</p></header><div className="report-grid"><ReportBlock title="Согласовано" items={report.agreed} /><ReportBlock title="Осталось открытым" items={report.openQuestions} /><ReportBlock title="Интересы и мотивы" items={report.interests} /><ReportBlock title="Ошибки" items={report.mistakes} /><ReportBlock title="Советы тренера" items={report.advice} /><ReportBlock title="Риски" items={report.risks} /></div></section>}<div className="controls result-controls"><button className="quiet" onClick={() => setScreen("history")}>История версий</button>{messages.some((message) => message.role === "player") && branchInfo.correctionNumber < 3 && <button className="quiet" onClick={() => setScreen("talk")}>Исправить ошибку · осталось {3 - branchInfo.correctionNumber}</button>}<button className="primary" onClick={reset}>Новая попытка</button></div></section>}
     </main>
   </div>;
+}
+
+function AuthScreen() {
+  const [mode, setMode] = useState<"signin" | "signup">("signin");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true); setMessage("");
+    const result = mode === "signin" ? await signIn(email.trim(), password) : await signUp(email.trim(), password);
+    setBusy(false);
+    if (result.error) { setMessage(translateAuthError(result.error)); return; }
+    if ("confirmationRequired" in result && result.confirmationRequired) setMessage("Аккаунт создан. Откройте письмо Supabase и подтвердите email, затем войдите.");
+  }
+
+  return <main className="auth-shell"><section className="auth-card"><p className="kicker">Арена переговоров</p><h1>{mode === "signin" ? "Вход в аккаунт" : "Создание аккаунта"}</h1><p>Профиль, история и результаты переговоров будут доступны только вам.</p><form onSubmit={submit}><label>Email<input type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="name@example.com" /></label><label>Пароль<input type="password" autoComplete={mode === "signin" ? "current-password" : "new-password"} minLength={8} required value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Минимум 8 символов" /></label>{message && <p className="auth-message">{message}</p>}<button className="primary" disabled={busy}>{busy ? "Подождите…" : mode === "signin" ? "Войти" : "Создать аккаунт"}</button></form><button className="auth-switch" type="button" onClick={() => { setMode(mode === "signin" ? "signup" : "signin"); setMessage(""); }}>{mode === "signin" ? "Нет аккаунта? Создать" : "Уже есть аккаунт? Войти"}</button></section></main>;
+}
+
+function translateAuthError(message: string) {
+  if (/invalid login credentials/i.test(message)) return "Неверный email или пароль.";
+  if (/user already registered/i.test(message)) return "Аккаунт с таким email уже существует.";
+  if (/password should be/i.test(message)) return "Пароль слишком короткий. Используйте минимум 8 символов.";
+  if (/email not confirmed/i.test(message)) return "Сначала подтвердите email по ссылке из письма.";
+  return `Не удалось выполнить вход: ${message}`;
 }
 
 function HistoryView({ timelines, loading, error, names, onOpen, onPoint, onNew }: { timelines: SessionTimeline[]; loading: boolean; error: string; names: Map<string, string>; onOpen: (id: string) => void; onPoint: (id: string, message: StoredMessage) => void; onNew: () => void }) {
