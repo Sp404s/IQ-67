@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
 import type { User } from "@supabase/supabase-js";
 import { applySemanticEvaluation, createInitialState, sideLabels, type NegotiationPlan, type NegotiationState, type SemanticEvaluation, type SessionReport, type SideProfile } from "./negotiation";
 import { createBranchSession, createSession, listSessionTimelines, loadSession, saveSessionReport, saveTurn, type SessionSummary, type SessionTimeline, type StoredMessage } from "@/lib/supabase/storage";
-import { getAccount, saveAccountProfile, signIn, signOut, signUp } from "@/lib/supabase/account";
+import { getAccount, resendConfirmation, saveAccountProfile, signIn, signOut, signUp } from "@/lib/supabase/account";
 import { getSupabase } from "@/lib/supabase/client";
 
 type Screen = "home" | "workspace" | "talk" | "result" | "history" | "results" | "profile" | "settings";
@@ -299,6 +299,7 @@ function AuthScreen() {
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [confirmationEmail, setConfirmationEmail] = useState("");
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -306,10 +307,18 @@ function AuthScreen() {
     const result = mode === "signin" ? await signIn(email.trim(), password) : await signUp(email.trim(), password);
     setBusy(false);
     if (result.error) { setMessage(translateAuthError(result.error)); return; }
-    if ("confirmationRequired" in result && result.confirmationRequired) setMessage("Аккаунт создан. Откройте письмо Supabase и подтвердите email, затем войдите.");
+    if ("confirmationRequired" in result && result.confirmationRequired) { setConfirmationEmail(email.trim()); setMessage("Аккаунт создан. Откройте новое письмо Supabase и подтвердите email, затем войдите."); }
   }
 
-  return <main className="auth-shell"><section className="auth-card"><p className="kicker">Арена переговоров</p><h1>{mode === "signin" ? "Вход в аккаунт" : "Создание аккаунта"}</h1><p>Профиль, история и результаты переговоров будут доступны только вам.</p><form onSubmit={submit}><label>Email<input type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="name@example.com" /></label><label>Пароль<input type="password" autoComplete={mode === "signin" ? "current-password" : "new-password"} minLength={8} required value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Минимум 8 символов" /></label>{message && <p className="auth-message">{message}</p>}<button className="primary" disabled={busy}>{busy ? "Подождите…" : mode === "signin" ? "Войти" : "Создать аккаунт"}</button></form><button className="auth-switch" type="button" onClick={() => { setMode(mode === "signin" ? "signup" : "signin"); setMessage(""); }}>{mode === "signin" ? "Нет аккаунта? Создать" : "Уже есть аккаунт? Войти"}</button></section></main>;
+  async function resend() {
+    if (!confirmationEmail || busy) return;
+    setBusy(true);
+    const result = await resendConfirmation(confirmationEmail);
+    setBusy(false);
+    setMessage(result.error ? translateAuthError(result.error) : "Новое письмо отправлено. Используйте ссылку только из последнего письма.");
+  }
+
+  return <main className="auth-shell"><section className="auth-card"><p className="kicker">Арена переговоров</p><h1>{mode === "signin" ? "Вход в аккаунт" : "Создание аккаунта"}</h1><p>Профиль, история и результаты переговоров будут доступны только вам.</p><form onSubmit={submit}><label>Email<input type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="name@example.com" /></label><label>Пароль<input type="password" autoComplete={mode === "signin" ? "current-password" : "new-password"} minLength={8} required value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Минимум 8 символов" /></label>{message && <p className="auth-message">{message}</p>}{confirmationEmail && <button className="resend-action" type="button" onClick={() => void resend()} disabled={busy}>Отправить письмо повторно</button>}<button className="primary" disabled={busy}>{busy ? "Подождите…" : mode === "signin" ? "Войти" : "Создать аккаунт"}</button></form><button className="auth-switch" type="button" onClick={() => { setMode(mode === "signin" ? "signup" : "signin"); setMessage(""); setConfirmationEmail(""); }}>{mode === "signin" ? "Нет аккаунта? Создать" : "Уже есть аккаунт? Войти"}</button></section></main>;
 }
 
 function translateAuthError(message: string) {

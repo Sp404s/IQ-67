@@ -23,8 +23,17 @@ export async function signIn(email: string, password: string) {
 export async function signUp(email: string, password: string) {
   const supabase = getSupabase();
   if (!supabase) return { error: "Supabase не настроен.", confirmationRequired: false };
-  const { data, error } = await supabase.auth.signUp({ email, password });
+  const emailRedirectTo = typeof window === "undefined" ? undefined : `${window.location.origin}/`;
+  const { data, error } = await supabase.auth.signUp({ email, password, options: { emailRedirectTo } });
   return { error: error?.message ?? null, confirmationRequired: Boolean(data.user && !data.session) };
+}
+
+export async function resendConfirmation(email: string) {
+  const supabase = getSupabase();
+  if (!supabase) return { error: "Supabase не настроен." };
+  const emailRedirectTo = typeof window === "undefined" ? undefined : `${window.location.origin}/`;
+  const { error } = await supabase.auth.resend({ type: "signup", email, options: { emailRedirectTo } });
+  return { error: error?.message ?? null };
 }
 
 export async function signOut() {
