@@ -29,13 +29,32 @@ export type LoadedSession = {
 };
 export type SessionTimeline = SessionSummary & { messages: StoredMessage[] };
 
+let userPromise: Promise<ReturnType<typeof getSupabase>> | null = null;
+
 async function ensureUser() {
-  const supabase = getSupabase();
-  if (!supabase) return null;
-  const { data } = await supabase.auth.getUser();
-  if (data.user) return supabase;
-  const { error } = await supabase.auth.signInAnonymously();
-  return error ? null : supabase;
+  if (userPromise) return userPromise;
+  userPromise = (async () => {
+    const supabase = getSupabase();
+    if (!supabase) return null;
+    try {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const { data } = await supabase.auth.getUser();
+        if (data.user) return supabase;
+        const { error } = await supabase.auth.signInAnonymously();
+        if (!error) return supabase;
+        if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 350));
+      }
+    } catch {
+      try {
+        const { error } = await supabase.auth.signInAnonymously();
+        if (!error) return supabase;
+      } catch { /* the caller will use local mode */ }
+    }
+    return null;
+  })();
+  const result = await userPromise;
+  if (!result) userPromise = null;
+  return result;
 }
 
 function normalizeState(value: Partial<NegotiationState> | null | undefined): NegotiationState {
