@@ -11,6 +11,7 @@ export type SessionSummary = {
   player: SideProfile;
   opponent: SideProfile;
   parentSessionId: string | null;
+  rootSessionId: string | null;
   branchedFromTurn: number | null;
   messageCount: number;
   correctionNumber: number;
@@ -23,6 +24,7 @@ export type LoadedSession = {
   state: NegotiationState;
   messages: StoredMessage[];
   parentSessionId: string | null;
+  rootSessionId: string | null;
   branchedFromTurn: number | null;
   correctionNumber: number;
   report: SessionReport | null;
@@ -98,7 +100,7 @@ export async function listSessions(): Promise<SessionSummary[]> {
   const supabase = await ensureUser(); if (!supabase) return [];
   const { data, error } = await supabase
     .from("negotiation_sessions")
-    .select("id,title,created_at,updated_at,status,player,opponent,parent_session_id,branched_from_turn,correction_number,negotiation_messages(count)")
+    .select("id,title,created_at,updated_at,status,player,opponent,parent_session_id,root_session_id,branched_from_turn,correction_number,negotiation_messages(count)")
     .order("updated_at", { ascending: false });
   if (error) throw new Error(error.message);
   if (!data) return [];
@@ -111,6 +113,7 @@ export async function listSessions(): Promise<SessionSummary[]> {
     player: normalizeProfile(row.player as SideProfile),
     opponent: normalizeProfile(row.opponent as SideProfile),
     parentSessionId: row.parent_session_id ? String(row.parent_session_id) : null,
+    rootSessionId: row.root_session_id ? String(row.root_session_id) : null,
     branchedFromTurn: typeof row.branched_from_turn === "number" ? row.branched_from_turn : null,
     messageCount: Array.isArray(row.negotiation_messages) ? Number(row.negotiation_messages[0]?.count ?? 0) : 0,
     correctionNumber: Number(row.correction_number ?? 0),
@@ -120,7 +123,7 @@ export async function listSessions(): Promise<SessionSummary[]> {
 export async function loadSession(sessionId: string): Promise<LoadedSession | null> {
   const supabase = await ensureUser(); if (!supabase) return null;
   const [sessionResult, messagesResult, snapshotsResult] = await Promise.all([
-    supabase.from("negotiation_sessions").select("id,player,opponent,plan,current_state,parent_session_id,branched_from_turn,correction_number,report").eq("id", sessionId).single(),
+    supabase.from("negotiation_sessions").select("id,player,opponent,plan,current_state,parent_session_id,root_session_id,branched_from_turn,correction_number,report").eq("id", sessionId).single(),
     supabase.from("negotiation_messages").select("id,turn,role,content").eq("session_id", sessionId).order("turn").order("id"),
     supabase.from("negotiation_snapshots").select("turn,state,action").eq("session_id", sessionId).order("turn"),
   ]);
@@ -157,6 +160,7 @@ export async function loadSession(sessionId: string): Promise<LoadedSession | nu
     id: String(session.id), player, opponent, plan,
     state: normalizeState(session.current_state as Partial<NegotiationState>), messages,
     parentSessionId: session.parent_session_id ? String(session.parent_session_id) : null,
+    rootSessionId: session.root_session_id ? String(session.root_session_id) : null,
     branchedFromTurn: typeof session.branched_from_turn === "number" ? session.branched_from_turn : null,
     correctionNumber: Number(session.correction_number ?? 0),
     report: session.report as SessionReport | null,
@@ -170,6 +174,22 @@ export async function listSessionTimelines(): Promise<SessionTimeline[]> {
     return session ? { ...summary, messages: session.messages, report: session.report, state: session.state } : null;
   }));
   return loaded.filter((session): session is SessionTimeline => Boolean(session));
+}
+
+export async function deleteEmptySessions(excludeId?: string | null) {
+  const supabase = await ensureUser(); if (!supabase) return 0;
+  const cutoff = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+  const [sessionsResult, playerMessagesResult] = await Promise.all([
+    supabase.from("negotiation_sessions").select("id,status").lt("created_at", cutoff),
+    supabase.from("negotiation_messages").select("session_id").eq("role", "player"),
+  ]);
+  if (sessionsResult.error || playerMessagesResult.error) return 0;
+  const playerMessageCounts = new Map<string, number>();
+  for (const row of playerMessagesResult.data ?? []) { const id = String(row.session_id); playerMessageCounts.set(id, (playerMessageCounts.get(id) ?? 0) + 1); }
+  const emptyIds = (sessionsResult.data ?? []).filter((row) => row.status === "active").map((row) => String(row.id)).filter((id) => id !== excludeId && (playerMessageCounts.get(id) ?? 0) <= 1);
+  if (!emptyIds.length) return 0;
+  const { error } = await supabase.from("negotiation_sessions").delete().in("id", emptyIds);
+  return error ? 0 : emptyIds.length;
 }
 
 export async function createBranchSession(sourceSessionId: string, fromTurn: number, player: SideProfile, opponent: SideProfile, plan: NegotiationPlan, baseState: NegotiationState) {
