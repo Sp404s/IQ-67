@@ -22,9 +22,10 @@ export async function POST(request: Request) {
   if (!body.player || !body.opponent || !body.state || !Array.isArray(body.messages)) return Response.json({ error: "Не хватает данных сессии." }, { status: 400 });
   const transcript = body.messages.slice(-60).map((message) => `${message.role === "player" ? body.player.name : body.opponent.name}: ${String(message.text).slice(0, 1000)}`).join("\n");
   const prompt = `Ты тренер по переговорам. Проанализируй завершённый учебный диалог на русском языке.
-Участник: ${body.player.name} ${body.player.patronymic}, ${body.player.role}, цель: ${body.player.goal}.
+Участник: ${body.player.name} ${body.player.patronymic}, ${body.player.role}. Услуги: ${body.player.services ?? body.player.goal}. Опыт и сильные стороны: ${body.player.experienceStrengths ?? "не указаны"}.
 Оппонент: ${body.opponent.name} ${body.opponent.patronymic}, ${body.opponent.role}, цель: ${body.opponent.goal}.
 Итоговые показатели: доверие ${body.state.trust}, интерес ${body.state.dealInterest}, раздражение ${body.state.irritation}, этичность ${body.state.ethicalConduct}, взаимопонимание ${100 - body.state.misunderstanding}.
+Оценка SPIN: S=${body.state.matchedKeywords.includes("spin-s") ? "да" : "нет"}, P=${body.state.matchedKeywords.includes("spin-p") ? "да" : "нет"}, I=${body.state.matchedKeywords.includes("spin-i") ? "да" : "нет"}, N=${body.state.matchedKeywords.includes("spin-n") ? "да" : "нет"}. Возражение отработано: ${body.state.matchedKeywords.includes("objection") ? "да" : "нет"}. Завершение сделки: ${body.state.matchedKeywords.includes("closing") ? "да" : "нет"}.
 Память: ${JSON.stringify(body.state.memory)}.
 Диалог:\n${transcript}
 
