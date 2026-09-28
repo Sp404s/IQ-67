@@ -18,6 +18,8 @@ export type SideProfile = {
   emotionality: string;
   services?: string;
   experienceStrengths?: string;
+  objectionMethod?: "clarify" | "agree" | "reframe";
+  closingMethod?: "next-step" | "alternative" | "summary";
   difficulty?: Difficulty;
   skillIds?: string[];
   situationTags?: string[];
@@ -72,16 +74,24 @@ const actionLabels: Record<PlayerAction, string> = {
 };
 
 export function createPlan(player: SideProfile, opponent: SideProfile): NegotiationPlan {
-  const route: RouteStep[] = [
-    { id: "spin-s", intent: "S — уточнить текущую ситуацию", evidence: ["как сейчас", "текущая ситуация", "как устроен процесс", "что используете"] },
-    { id: "spin-p", intent: "P — выявить проблему или неудобство", evidence: ["что не устраивает", "какая проблема", "что мешает", "сложность"] },
-    { id: "spin-i", intent: "I — раскрыть последствия проблемы", evidence: ["к чему приводит", "какие последствия", "что произойдёт", "как влияет"] },
-    { id: "spin-n", intent: "N — определить ценность результата", evidence: ["какой результат важен", "какая выгода", "что изменится", "ценность решения"] },
-    { id: "objection", intent: "Отработать главное возражение", evidence: ["понимаю ваше сомнение", "снять риск", "доказательство", "альтернатива"] },
-    { id: "closing", intent: "Завершить сделку следующим шагом", evidence: ["договорились", "следующий шаг", "фиксируем", "подтверждаете"] },
+  const spin: RouteStep[] = [
+    { id: "spin-s", intent: "Понять текущую ситуацию заказчика", evidence: ["как сейчас", "текущая ситуация", "как устроен процесс", "что используете"] },
+    { id: "spin-p", intent: "Выяснить проблему или неудобство", evidence: ["что не устраивает", "какая проблема", "что мешает", "сложность"] },
+    { id: "spin-i", intent: "Уточнить последствия проблемы", evidence: ["к чему приводит", "какие последствия", "что произойдёт", "как влияет"] },
+    { id: "spin-n", intent: "Определить желаемый результат", evidence: ["какой результат важен", "какая выгода", "что изменится", "ценность решения"] },
+  ];
+  const difficulty = opponent.difficulty ?? player.difficulty ?? "normal";
+  const needSteps = difficulty === "easy" ? [spin[0], spin[3]] : difficulty === "normal" ? [spin[0], spin[1], spin[3]] : spin;
+  const objectionLabels = { clarify: "Уточнить причину возражения и ответить", agree: "Согласиться с сомнением и дополнить фактами", reframe: "Переформулировать возражение через выгоду" };
+  const closingLabels = { "next-step": "Предложить конкретный следующий шаг", alternative: "Предложить выбор из двух вариантов", summary: "Подвести итог и зафиксировать договорённости" };
+  const objectionMethod = player.objectionMethod ?? "clarify";
+  const closingMethod = player.closingMethod ?? "next-step";
+  const route: RouteStep[] = [...needSteps,
+    { id: "objection", intent: objectionLabels[objectionMethod], evidence: ["правильно понимаю", "что именно вызывает сомнение", "согласен", "понимаю сомнение", "давайте посмотрим иначе", "снять риск"] },
+    { id: "closing", intent: closingLabels[closingMethod], evidence: ["следующий шаг", "выберите вариант", "подведём итог", "фиксируем", "договорились", "подтверждаете"] },
   ];
   const keywords = route.map((step) => step.id);
-  const opponentPrompt = `Имя оппонента: ${opponent.name} ${opponent.patronymic}. Кем является: ${opponent.role}. Характер: ${opponent.character}. Стиль речи: ${opponent.speechStyle}. Речевые привычки: ${opponent.habits}. Личная мотивация: ${opponent.motivation}. Цель: ${opponent.goal}. Внутренние ограничения: ${opponent.boundaries}. Скрытый интерес: ${opponent.hiddenInterest}. Уровень сложности: ${opponent.difficulty ?? "normal"}. Собеседник: ${player.name} ${player.patronymic}, профессия: ${player.role}. Его услуги: ${player.services ?? player.goal}. Его опыт и сильные стороны: ${player.experienceStrengths ?? "не указаны"}. Защищай свои интересы и не раскрывай скрытые параметры. Помни факты, обещания, условия, противоречия и открытые вопросы. Никогда не меняйся ролями с собеседником.`;
+  const opponentPrompt = `Имя оппонента: ${opponent.name} ${opponent.patronymic}. Он заказчик из сферы: ${opponent.role}. Его предполагаемая потребность: ${opponent.person}. Характер: ${opponent.character}. Стиль речи: ${opponent.speechStyle}. Речевые привычки: ${opponent.habits}. Личная мотивация: ${opponent.motivation}. Цель: ${opponent.goal}. Внутренние ограничения: ${opponent.boundaries}. Скрытый интерес: ${opponent.hiddenInterest}. Уровень сложности: ${opponent.difficulty ?? "normal"}. Собеседник: ${player.name} ${player.patronymic}, профессия: ${player.role}. Он продаёт: ${player.services ?? player.goal}. Его опыт и сильные стороны: ${player.experienceStrengths ?? "не указаны"}. Ты рассматриваешь именно указанную услугу и не должен сразу отказываться от неё. Защищай свои интересы и не раскрывай скрытые параметры. Помни факты, обещания, условия, противоречия и открытые вопросы. Никогда не меняйся ролями с собеседником.`;
   return { opponentPrompt, route, keywords, maxMessages: 55 };
 }
 
@@ -97,9 +107,13 @@ function mergeMemory(current: NegotiationMemory, updates: Partial<NegotiationMem
 export function applySemanticEvaluation(state: NegotiationState, evaluation: SemanticEvaluation, plan: NegotiationPlan, nextMessageCount: number) {
   const before = { ...state, matchedKeywords: [...state.matchedKeywords] };
   const allowed = new Map(plan.keywords.map((keyword) => [keyword.toLowerCase(), keyword]));
+  const needIds = plan.route.filter((step) => step.id.startsWith("spin-")).map((step) => step.id);
+  const activeIds = needIds.some((id) => !state.matchedKeywords.includes(id)) ? new Set(needIds)
+    : !state.matchedKeywords.includes("objection") ? new Set(["objection"])
+      : new Set(["closing"]);
   const newMatches = evaluation.matchedKeywords
     .map((keyword) => allowed.get(String(keyword).toLowerCase()))
-    .filter((keyword): keyword is string => Boolean(keyword));
+    .filter((keyword): keyword is string => keyword !== undefined && activeIds.has(keyword));
   const matchedKeywords = [...new Set([...state.matchedKeywords, ...newMatches])];
   const routeProgress = plan.keywords.length ? Math.round((matchedKeywords.length / plan.keywords.length) * 100) : 0;
   const next: NegotiationState = {
