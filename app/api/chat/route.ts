@@ -53,6 +53,18 @@ function parseEvaluation(content: string, allowedIds: string[]): SemanticEvaluat
   } catch { return null; }
 }
 
+function parseCombined(content: string, allowedIds: string[]) {
+  const cleaned = content.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
+  const start = cleaned.indexOf("{"), end = cleaned.lastIndexOf("}");
+  if (start < 0 || end <= start) return null;
+  try {
+    const raw = JSON.parse(cleaned.slice(start, end + 1)) as Record<string, unknown>;
+    const reply = String(raw.reply ?? "").trim().slice(0, 1400);
+    const evaluation = parseEvaluation(cleaned, allowedIds);
+    return reply && evaluation ? { reply, evaluation } : null;
+  } catch { return null; }
+}
+
 async function complete(apiKey: string, messages: Array<{ role: string; content: string }>, json = false) {
   const retryableStatuses = new Set([429, 500, 502, 503, 504]);
   let lastStatus = 0;
@@ -96,19 +108,15 @@ export async function POST(request: Request) {
   const side = resolveSide(body.opponent);
   const sideRule = side === "buyer" ? "Ты заказчик: оцениваешь предложение и не продаёшь пользователю услуги." : side === "provider" ? "Ты исполнитель: предлагаешь услугу и не изображаешь заказчика." : "Строго соблюдай указанную роль.";
   const history = body.messages.slice(-16).map((message) => ({ role: message.role === "player" ? "user" : "assistant", content: message.text.slice(0, 1200) }));
-  const dialogueSystem = `Ты — оппонент в реалистичном симуляторе переговоров. Отвечай только репликой персонажа на русском языке, без JSON и пояснений. ${sideRule}\n${body.plan.opponentPrompt}\nСостояние: доверие ${body.state.trust}, интерес ${body.state.dealInterest}, раздражение ${body.state.irritation}, недопонимание ${body.state.misunderstanding}. Память: ${JSON.stringify(body.state.memory)}. Продвигай собственную цель, реагируй на конкретный смысл последней реплики. Не повторяй формулировки из предыдущих ответов. Если вопрос неясен — уточни, что именно непонятно. 1–4 предложения.`;
+  const dialogueSystem = `Ты одновременно играешь оппонента и анализируешь последний ход в симуляторе переговоров. ${sideRule}\n${body.plan.opponentPrompt}\nСостояние: доверие ${body.state.trust}, интерес ${body.state.dealInterest}, раздражение ${body.state.irritation}, недопонимание ${body.state.misunderstanding}. Память: ${JSON.stringify(body.state.memory)}. Реплика персонажа должна отвечать на конкретный смысл последнего сообщения, содержать 1–4 предложения и не повторять прежние ответы.`;
   try {
-    let replyResult = await complete(apiKey, [{ role: "system", content: dialogueSystem }, ...history]);
-    if (repeatsHistory(replyResult.content, body.messages) || hasRoleConfusion(replyResult.content, side)) {
-      replyResult = await complete(apiKey, [{ role: "system", content: `${dialogueSystem}\nПредыдущий вариант повторялся или нарушал роль. Дай содержательно новый ответ, опираясь именно на последнюю реплику: «${latest.slice(0, 900)}».` }, ...history]);
-    }
-    if (repeatsHistory(replyResult.content, body.messages) || hasRoleConfusion(replyResult.content, side)) throw new Error("Модель повторила прежний ответ или перепутала роли. Попробуйте переформулировать реплику.");
     const route = body.plan.route.map((step) => `${step.id}: ${step.intent}; признаки: ${step.evidence.join(" | ")}`).join("\n");
-    const evaluationPrompt = `Ты — независимый аналитик переговоров. Оцени только последнюю реплику пользователя по смыслу. Не оценивай ответ оппонента как достижение пользователя.\nПоследняя реплика: «${latest.slice(0, 1200)}»\nОтвет оппонента: «${replyResult.content.slice(0, 1200)}»\nСкрытый маршрут:\n${route}\nТекущее состояние: ${JSON.stringify(body.state)}\nВ betterReply предложи один более сильный вариант именно этой реплики: естественный, конкретный, без манипуляций, максимум 3 предложения.\nВерни только JSON со всеми полями: {"action":"question|offer|trade|pressure|alternative|statement","trustDelta":0,"irritationDelta":0,"dealInterestDelta":0,"ethicalConductDelta":0,"misunderstandingDelta":0,"matchedKeywords":["только id действительно раскрытых шагов"],"reserveFound":false,"reserveUsed":false,"rationale":"...","interpretation":"...","betterReply":"как можно было сказать лучше","ethicalConcern":"none|ambiguity|disrespect|deception|coercion","nonverbalCue":"...","memoryUpdates":{"promises":[],"concessions":[],"contradictions":[],"threats":[],"agreements":[],"openQuestions":[]}}`;
-    const evaluationResult = await complete(apiKey, [{ role: "system", content: "Ты независимый аналитик переговоров. Возвращай только JSON." }, { role: "user", content: evaluationPrompt }], true);
-    const evaluation = parseEvaluation(evaluationResult.content, body.plan.keywords);
-    if (!evaluation) throw new Error("Аналитик вернул некорректную оценку хода.");
-    return Response.json({ reply: replyResult.content, evaluation, model: replyResult.model });
+    const prompt = `${dialogueSystem}\nСкрытые цели оценки:\n${route}\nПоследняя реплика пользователя: «${latest.slice(0, 1200)}»\nВерни только компактный JSON. Поле reply — ответ оппонента. Остальные поля — смысловая оценка только последней реплики пользователя. betterReply — более сильный вариант этой реплики, максимум 3 предложения. Схема: {"reply":"ответ оппонента","action":"question|offer|trade|pressure|alternative|statement","trustDelta":0,"irritationDelta":0,"dealInterestDelta":0,"ethicalConductDelta":0,"misunderstandingDelta":0,"matchedKeywords":["только достигнутые id"],"reserveFound":false,"reserveUsed":false,"rationale":"...","interpretation":"...","betterReply":"...","ethicalConcern":"none|ambiguity|disrespect|deception|coercion","nonverbalCue":"...","memoryUpdates":{"promises":[],"concessions":[],"contradictions":[],"threats":[],"agreements":[],"openQuestions":[]}}`;
+    const result = await complete(apiKey, [{ role: "system", content: prompt }, ...history], true);
+    const parsed = parseCombined(result.content, body.plan.keywords);
+    if (!parsed) throw new Error("Модель вернула некорректный ответ.");
+    if (repeatsHistory(parsed.reply, body.messages) || hasRoleConfusion(parsed.reply, side)) throw new Error("Модель повторила ответ или перепутала роли. Отправьте реплику ещё раз.");
+    return Response.json({ reply: parsed.reply, evaluation: parsed.evaluation, model: result.model });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "Не удалось получить ответ модели." }, { status: 502 });
   }
