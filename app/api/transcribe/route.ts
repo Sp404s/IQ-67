@@ -1,4 +1,4 @@
-type GeminiAudioResult = { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>; error?: { message?: string } };
+type GeminiAudioResult = { candidates?: Array<{ content?: { parts?: Array<{ text?: string; audioTranscription?: { text?: string } }> } }>; error?: { message?: string } };
 
 export async function POST(request: Request) {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -17,7 +17,7 @@ export async function POST(request: Request) {
       body: JSON.stringify({ contents: [{ role: "user", parts: [{ inlineData: { mimeType, data: base64 } }] }], generationConfig: { audioTranscriptionConfig: { languageCodes: ["ru-RU"], mode: "SMART" } } }),
     });
     const data = await response.json() as GeminiAudioResult;
-    const text = data.candidates?.[0]?.content?.parts?.map((part) => part.text ?? "").join("").trim();
+    const text = data.candidates?.[0]?.content?.parts?.map((part) => part.audioTranscription?.text ?? part.text ?? "").join("").trim();
     if (!response.ok || !text) return Response.json({ error: data.error?.message ?? "Не удалось распознать речь." }, { status: 502 });
     return Response.json({ text });
   } catch { return Response.json({ error: "Не удалось обработать запись." }, { status: 500 }); }
