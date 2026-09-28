@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import Image from "next/image";
 import type { User } from "@supabase/supabase-js";
 import { applySemanticEvaluation, createInitialState, type Difficulty, type NegotiationPlan, type NegotiationState, type SemanticEvaluation, type SessionReport, type SideProfile } from "./negotiation";
 import { createBranchSession, createSession, listSessionTimelines, loadSession, saveSessionReport, saveTurn, type SessionSummary, type SessionTimeline, type StoredMessage } from "@/lib/supabase/storage";
@@ -399,25 +399,15 @@ function ProfileForm({ profile, onChange, highlighted = false }: { profile: Side
 
 type AppIconName = "home" | "spark" | "chat" | "history" | "chart" | "profile" | "settings" | "trust" | "interest" | "irritation" | "ethics" | "understanding" | "mic" | "send" | "finish" | "shuffle";
 function AppIcon({ name }: { name: AppIconName }) {
-  const paths: Record<AppIconName, ReactNode> = {
-    home: <><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10.5V20h13v-9.5"/></>,
-    spark: <><path d="m12 3 1.2 4.2L17 9l-3.8 1.8L12 15l-1.2-4.2L7 9l3.8-1.8L12 3Z"/><path d="m19 15 .7 2.3L22 18l-2.3.7L19 21l-.7-2.3L16 18l2.3-.7L19 15Z"/></>,
-    chat: <><path d="M4 5.5h16v11H9l-5 3v-14Z"/><path d="M8 10h8M8 13h5"/></>,
-    history: <><path d="M4 5v5h5"/><path d="M5.6 17.5A8 8 0 1 0 4 10"/><path d="M12 7v5l3 2"/></>,
-    chart: <><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></>,
-    profile: <><circle cx="12" cy="8" r="4"/><path d="M4.5 21a7.5 7.5 0 0 1 15 0"/></>,
-    settings: <><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3A1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/></>,
-    trust: <><path d="M12 21s-8-4.8-8-11a4.5 4.5 0 0 1 8-2.8A4.5 4.5 0 0 1 20 10c0 6.2-8 11-8 11Z"/></>,
-    interest: <><circle cx="12" cy="12" r="3"/><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"/></>,
-    irritation: <><path d="M13 2 5 13h6l-1 9 9-13h-6V2Z"/></>,
-    ethics: <><path d="M12 3v18M5 7h14M5 7l-3 6h6L5 7ZM19 7l-3 6h6l-3-6ZM8 21h8"/></>,
-    understanding: <><path d="M9 18h6M10 21h4"/><path d="M8.2 14.5A7 7 0 1 1 15.8 14.5C14.6 15.3 14 16 14 17h-4c0-1-.6-1.7-1.8-2.5Z"/></>,
-    mic: <><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6"/></>,
-    send: <><path d="m3 11 18-8-8 18-2-8-8-2Z"/><path d="m11 13 5-5"/></>,
-    finish: <><path d="M5 3v18M6 5h12l-3 4 3 4H6"/></>,
-    shuffle: <><path d="M4 7h3c5 0 5 10 10 10h3"/><path d="m17 14 3 3-3 3M4 17h3c2 0 3-1.5 4-3M15 7h5M17 4l3 3-3 3"/></>,
+  const sources: Record<AppIconName, string> = {
+    home: "/icons/logo.svg", spark: "/icons/new-session.svg", chat: "/icons/history.svg",
+    history: "/icons/history.svg", chart: "/icons/statistics.svg", profile: "/icons/profile.svg",
+    settings: "/icons/settings.png", trust: "/icons/tasks.svg", interest: "/icons/advice.svg",
+    irritation: "/icons/advice.svg", ethics: "/icons/tasks.svg", understanding: "/icons/advice.svg",
+    mic: "/icons/microphone.svg", send: "/icons/send.svg", finish: "/icons/tasks.svg",
+    shuffle: "/icons/new-session.svg",
   };
-  return <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg>;
+  return <Image className="app-icon-image" src={sources[name]} width={47} height={47} alt="" aria-hidden="true" />;
 }
 function ResultRow({ label, value }: { label: string; value: string | number }) { return <div><span>{label}</span><strong>{value}</strong></div>; }
 function ReportBlock({ title, items }: { title: string; items: string[] }) { return <article><h3>{title}</h3>{items.length ? <ul>{items.map((item, index) => <li key={`${title}-${index}`}>{item}</li>)}</ul> : <p>Не выявлено.</p>}</article>; }
