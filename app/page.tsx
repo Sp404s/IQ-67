@@ -54,6 +54,7 @@ export default function Home() {
   const [report, setReport] = useState<SessionReport | null>(null), [reportLoading, setReportLoading] = useState(false);
   const [theme, setTheme] = useState<"light" | "dark">(() => typeof window !== "undefined" && window.localStorage.getItem("negotiation-theme") === "dark" ? "dark" : "light");
   const [language, setLanguage] = useState(() => typeof window !== "undefined" ? window.localStorage.getItem("negotiation-language") ?? "ru" : "ru");
+  const isEnglish = language === "en";
 
   const lastSnapshot = useMemo(() => [...messages].reverse().find((message) => message.snapshot)?.snapshot, [messages]);
   const taskStage = useMemo(() => {
@@ -78,6 +79,26 @@ export default function Home() {
       } else if (account?.user) {
         setScreen("profile");
       }
+      if (account?.user) {
+        const activeId = window.localStorage.getItem("negotiation-active-session");
+        let restored = false;
+        if (activeId) {
+          const activeSession = await loadSession(activeId);
+          if (activeSession?.state.status === "active") {
+            setPlayer(activeSession.player); setOpponent(activeSession.opponent); setPlan(activeSession.plan); setState(activeSession.state); setMessages(activeSession.messages); setSessionId(activeSession.id); setReport(activeSession.report);
+            setBranchInfo({ parentSessionId: activeSession.parentSessionId, branchedFromTurn: activeSession.branchedFromTurn, correctionNumber: activeSession.correctionNumber });
+            setScreen(activeSession.report ? "result" : "talk"); restored = true;
+          } else if (activeId) window.localStorage.removeItem("negotiation-active-session");
+        }
+        if (!restored) {
+          try {
+            const cached = JSON.parse(window.localStorage.getItem("negotiation-active-state") ?? "null") as { player?: SideProfile; opponent?: SideProfile; plan?: NegotiationPlan; state?: NegotiationState; messages?: Message[]; sessionId?: string | null; report?: SessionReport | null } | null;
+            if (cached?.plan && cached.player && cached.opponent && cached.state?.status === "active" && Array.isArray(cached.messages)) {
+              setPlayer(cached.player); setOpponent(cached.opponent); setPlan(cached.plan); setState(cached.state); setMessages(cached.messages); setSessionId(cached.sessionId ?? null); setReport(cached.report ?? null); setScreen(cached.report ? "result" : "talk");
+            }
+          } catch { window.localStorage.removeItem("negotiation-active-state"); }
+        }
+      }
       setProfileReady(Boolean(account?.user));
       setAuthLoading(false);
     };
@@ -98,6 +119,11 @@ export default function Home() {
 
   useEffect(() => { document.documentElement.dataset.theme = theme; window.localStorage.setItem("negotiation-theme", theme); }, [theme]);
   useEffect(() => { document.documentElement.lang = language; window.localStorage.setItem("negotiation-language", language); }, [language]);
+  useEffect(() => { if (sessionId && state.status === "active") window.localStorage.setItem("negotiation-active-session", sessionId); }, [sessionId, state.status]);
+  useEffect(() => {
+    if (!plan || !messages.length || state.status !== "active") return;
+    window.localStorage.setItem("negotiation-active-state", JSON.stringify({ player, opponent, plan, state, messages, sessionId, report }));
+  }, [player, opponent, plan, state, messages, sessionId, report]);
   useEffect(() => { const field = composerRef.current; if (!field) return; field.style.height = "0px"; field.style.height = `${Math.max(52, field.scrollHeight)}px`; }, [draft]);
 
   async function refreshHistory() {
@@ -143,7 +169,7 @@ export default function Home() {
 
   async function startNegotiation(activePlan: NegotiationPlan, activeOpponent = opponent) {
     const opening = activeOpponent.side === "buyer"
-      ? `Здравствуйте, ${player.name}${player.patronymic ? ` ${player.patronymic}` : ""}. Я увидел${/а$/.test(activeOpponent.name) ? "а" : ""}, что вы предлагаете: «${player.services?.trim()}». Для моего бизнеса сейчас важно ${activeOpponent.person.toLowerCase()}. Расскажите, как вы предлагаете решить эту задачу?`
+      ? `Здравствуйте, ${player.name}${player.patronymic ? ` ${player.patronymic}` : ""}. В вашем профиле указано: «${player.services?.trim()}». Для моего бизнеса сейчас важно ${activeOpponent.person.toLowerCase()}. Расскажите, как ваша услуга поможет решить эту задачу?`
       : opponent.side === "provider"
         ? `Здравствуйте, ${player.name} ${player.patronymic}. Расскажите, какую задачу вы хотите решить, какой результат и сроки рассматриваете?`
         : `Здравствуйте, ${player.name} ${player.patronymic}. Предлагаю обозначить позиции сторон и ожидаемый результат разговора.`;
@@ -309,6 +335,8 @@ export default function Home() {
   }
 
   function reset() {
+    window.localStorage.removeItem("negotiation-active-session");
+    window.localStorage.removeItem("negotiation-active-state");
     setPlayer(profile); setState(createInitialState()); setMessages([]); setSessionId(null); setSaveState("local"); setAiError(""); setPlan(null); setRewrite(null); setReport(null); setSuggestionUses(0); setBranchInfo({ parentSessionId: null, branchedFromTurn: null, correctionNumber: 0 }); setScreen("workspace");
   }
 
@@ -317,7 +345,7 @@ export default function Home() {
 
   return <div className="app-shell">
     <nav className="side-nav" aria-label="Основная навигация">
-      <button className={`icon-button ${screen === "home" || screen === "talk" ? "active" : ""}`} data-tooltip="Главная" aria-label="Главная" onClick={() => setScreen(plan ? "talk" : "home")}><AppIcon name="home" /></button>
+      <button className={`icon-button ${screen === "home" || screen === "talk" ? "active" : ""}`} data-tooltip={isEnglish ? "Home" : "Главная"} aria-label={isEnglish ? "Home" : "Главная"} onClick={() => setScreen(plan ? "talk" : "home")}><AppIcon name="home" /></button>
       <button className={`icon-button ${screen === "history" ? "active" : ""}`} data-tooltip="История диалога" aria-label="История диалога" onClick={() => { setScreen("history"); void refreshHistory(); }}><AppIcon name="history" /></button>
       <button className={`icon-button ${screen === "workspace" ? "active" : ""}`} data-tooltip="Новые переговоры" aria-label="Новые переговоры" onClick={reset}><AppIcon name="spark" /></button>
       <button className={`icon-button ${screen === "results" || screen === "result" ? "active" : ""}`} data-tooltip="Результаты" aria-label="Результаты" onClick={() => { setScreen("results"); void refreshHistory(); }}><AppIcon name="chart" /></button>
@@ -327,15 +355,15 @@ export default function Home() {
     </nav>
     {preparing && <div className="preparation-overlay" role="status"><div className="preparation-loader" /><strong>Создаём ситуацию и оппонента</strong><span>Подбираем сложность, цели и поведение…</span></div>}
     <main>
-      {screen === "home" && <section className="hero dialogue-empty"><p className="kicker">Персональная тренировка</p><h1>Проведите диалог с виртуальным оппонентом.</h1><p className="hero-copy">Настройте сложность, выберите навыки для развития и задайте собеседника.</p><div className="hero-actions"><button className="primary" onClick={reset}>Начать диалог</button></div></section>}
+      {screen === "home" && <section className="hero dialogue-empty"><p className="kicker">{isEnglish ? "Personal practice" : "Персональная тренировка"}</p><h1>{isEnglish ? "Practice a negotiation with a virtual client." : "Проведите диалог с виртуальным оппонентом."}</h1><p className="hero-copy">{isEnglish ? "Set the difficulty and describe the client to begin." : "Настройте сложность и задайте собеседника."}</p><div className="hero-actions"><button className="primary" onClick={reset}>{isEnglish ? "Start negotiation" : "Начать диалог"}</button></div></section>}
 
       {screen === "history" && <HistoryLibrary timelines={timelines} loading={historyLoading} error={historyError} onOpen={(id) => void openSavedSession(id)} onPoint={(id, message) => void openHistoryPoint(id, message)} onNew={reset} />}
 
       {screen === "results" && <ResultsArchive timelines={timelines} loading={historyLoading} onOpen={(id) => void openResult(id)} onNew={reset} />}
 
-      {screen === "profile" && <section className="profile-view"><header><p className="kicker">Ваши данные</p><h1>Профиль</h1><p>Эти данные автоматически используются при создании новых переговоров.</p></header><ProfileForm profile={profile} onChange={changeProfile} /><section className="profile-account"><strong>Аккаунт</strong><p>{accountUser.email}</p><button className="text-action" onClick={() => void signOut()}>Выйти из аккаунта</button></section><p className={`profile-saved ${profileSaveState === "error" ? "error" : ""}`}>{profileSaveState === "saving" ? "Сохраняем…" : profileSaveState === "error" ? "Не удалось сохранить профиль." : "Профиль сохранён."}</p></section>}
+      {screen === "profile" && <section className="profile-view"><header><p className="kicker">{isEnglish ? "Your details" : "Ваши данные"}</p><h1>{isEnglish ? "Profile" : "Профиль"}</h1><p>{isEnglish ? "These details are used automatically in new negotiations." : "Эти данные автоматически используются при создании новых переговоров."}</p></header><ProfileForm profile={profile} onChange={changeProfile} /><section className="profile-account"><strong>{isEnglish ? "Account" : "Аккаунт"}</strong><p>{accountUser.email}</p><button className="text-action" onClick={() => void signOut()}>{isEnglish ? "Sign out" : "Выйти из аккаунта"}</button></section><p className={`profile-saved ${profileSaveState === "error" ? "error" : ""}`}>{profileSaveState === "saving" ? (isEnglish ? "Saving…" : "Сохраняем…") : profileSaveState === "error" ? (isEnglish ? "Could not save profile." : "Не удалось сохранить профиль.") : (isEnglish ? "Profile saved." : "Профиль сохранён.")}</p></section>}
 
-      {screen === "settings" && <section className="settings-view"><p className="kicker">Приложение</p><h1>Настройки</h1><div className="settings-controls"><section className="settings-card"><h2>Язык интерфейса</h2><select value={language} onChange={(event) => setLanguage(event.target.value)}><option value="ru">Русский</option><option value="en">English</option></select><small>Переключение полного английского интерфейса появится в следующей версии.</small></section><section className="settings-card"><h2>Оформление</h2><div className="theme-buttons"><button className={theme === "light" ? "selected" : ""} onClick={() => setTheme("light")}>Светлая тема</button><button className={theme === "dark" ? "selected" : ""} onClick={() => setTheme("dark")}>Тёмная тема</button></div></section></div><div className="settings-grid"><article><AppIcon name="spark" /><div><strong>Нейросеть</strong><p>Gemini создаёт поведение заказчика и предлагает подсказки по ходу разговора.</p></div></article><article><AppIcon name="history" /><div><strong>Хранение данных</strong><p>Пустые сессии удаляются автоматически, остальные данные хранятся 7 дней.</p></div></article></div></section>}
+      {screen === "settings" && <section className="settings-view"><p className="kicker">{isEnglish ? "Application" : "Приложение"}</p><h1>{isEnglish ? "Settings" : "Настройки"}</h1><div className="settings-controls"><section className="settings-card"><h2>{isEnglish ? "Interface language" : "Язык интерфейса"}</h2><select value={language} onChange={(event) => setLanguage(event.target.value)}><option value="ru">Русский</option><option value="en">English</option></select><small>{isEnglish ? "The selected language is saved for this browser." : "Выбранный язык сохраняется для этого браузера."}</small></section><section className="settings-card"><h2>{isEnglish ? "Appearance" : "Оформление"}</h2><div className="theme-buttons"><button className={theme === "light" ? "selected" : ""} onClick={() => setTheme("light")}>{isEnglish ? "Light theme" : "Светлая тема"}</button><button className={theme === "dark" ? "selected" : ""} onClick={() => setTheme("dark")}>{isEnglish ? "Dark theme" : "Тёмная тема"}</button></div></section></div><div className="settings-grid"><article><AppIcon name="spark" /><div><strong>{isEnglish ? "AI opponent" : "Нейросеть"}</strong><p>{isEnglish ? "Gemini creates the client's behavior and provides coaching during the conversation." : "Gemini создаёт поведение заказчика и предлагает подсказки по ходу разговора."}</p></div></article><article><AppIcon name="history" /><div><strong>{isEnglish ? "Data storage" : "Хранение данных"}</strong><p>{isEnglish ? "Empty sessions are removed automatically; other data is stored for 7 days." : "Пустые сессии удаляются автоматически, остальные данные хранятся 7 дней."}</p></div></article></div></section>}
 
 {screen === "workspace" && <section className="workspace session-setup"><header className="workspace-head"><p className="kicker">Настройка сессии</p><h1>Подготовьте заказчика</h1><p>Укажите сферу бизнеса и выберите сложность разговора.</p></header><div className="setup-grid"><section className="setup-card training-card"><p className="field-kicker">Сложность разговора</p><div className="difficulty-tabs">{([{ id: "easy", title: "Легко", text: "Заказчик открыт к предложению. Достаточно выявить ситуацию и желаемый результат." }, { id: "normal", title: "Нормально", text: "Заказчик сомневается. Нужно выявить ситуацию, проблему и ожидаемый результат." }, { id: "serious", title: "Сложно", text: "Заказчик недоверчив. Потребуется пройти все этапы SPIN и привести доказательства." }] as const).map((item) => <button key={item.id} className={player.difficulty === item.id ? "selected" : ""} onClick={() => setDifficulty(item.id)}>{item.title}</button>)}</div><p className="difficulty-description">{player.difficulty === "easy" ? "Заказчик открыт к предложению. Достаточно выявить ситуацию и желаемый результат." : player.difficulty === "serious" ? "Заказчик недоверчив. Потребуется пройти все этапы SPIN и привести доказательства." : "Заказчик сомневается. Нужно выявить ситуацию, проблему и ожидаемый результат."}</p><div className="method-selects"><label>Как отвечать на возражения<select value={player.objectionMethod ?? "clarify"} onChange={(event) => changePlayer({ ...player, objectionMethod: event.target.value as SideProfile["objectionMethod"] })}><option value="clarify">Уточнить и ответить</option><option value="agree">Согласиться и дополнить</option><option value="reframe">Переформулировать через выгоду</option></select><small>Выберите приём, который хотите отработать после появления сомнения у заказчика.</small></label><label>Как завершать переговоры<select value={player.closingMethod ?? "next-step"} onChange={(event) => changePlayer({ ...player, closingMethod: event.target.value as SideProfile["closingMethod"] })}><option value="next-step">Предложить следующий шаг</option><option value="alternative">Выбор из двух вариантов</option><option value="summary">Резюме договорённостей</option></select><small>Выберите способ, которым будете переводить разговор к договорённости.</small></label></div></section><section className="setup-card opponent-fields"><div className="setup-card-head"><p className="field-kicker">Данные заказчика</p><button className="random-opponent action-with-icon" type="button" onClick={randomizeOpponentData}><AppIcon name="shuffle" />Случайный заказчик</button></div><div className="name-fields opponent-name-fields"><label><span>Имя <small className="optional">обязательно</small></span><input value={opponent.name} onChange={(event) => changeOpponent({ ...opponent, name: event.target.value })} placeholder="Например, Андрей" /></label><label><span>Отчество <small className="optional">необязательно</small></span><input value={opponent.patronymic} onChange={(event) => changeOpponent({ ...opponent, patronymic: event.target.value })} placeholder="Например, Михайлович" /></label></div><label>Сфера бизнеса заказчика <span className="field-example">например: маникюр, строительные материалы</span><input value={opponent.role} onChange={(event) => changeOpponent({ ...opponent, role: event.target.value })} placeholder="Например, салон маникюра" /></label><label>Цель заказчика<textarea value={opponent.goal} onChange={(event) => changeOpponent({ ...opponent, goal: event.target.value })} placeholder="Например, привлечь больше клиентов и убедиться в соблюдении сроков" /></label></section></div>{aiError && <p className="ai-error">{aiError}</p>}<div className="controls"><button className="quiet" onClick={() => setScreen("home")}>Назад</button><button className="primary" onClick={() => void beginSession()} disabled={preparing || !opponent.name.trim() || !opponent.role.trim() || !opponent.goal.trim()}>{preparing ? "Подготавливаем…" : "Создать сессию"}</button></div></section>}
 
