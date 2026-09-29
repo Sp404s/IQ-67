@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import type { User } from "@supabase/supabase-js";
 import { applySemanticEvaluation, createInitialState, type Difficulty, type NegotiationPlan, type NegotiationState, type SemanticEvaluation, type SessionReport, type SideProfile } from "./negotiation";
-import { createBranchSession, createSession, deleteEmptySessions, listSessionTimelines, loadSession, saveSessionReport, saveTurn, type SessionSummary, type SessionTimeline, type StoredMessage } from "@/lib/supabase/storage";
+import { createBranchSession, createSession, deleteEmptySessions, deleteSessionTree, listSessionTimelines, loadSession, saveSessionReport, saveTurn, type SessionSummary, type SessionTimeline, type StoredMessage } from "@/lib/supabase/storage";
 import { getAccount, resendConfirmation, saveAccountProfile, signIn, signOut, signUp } from "@/lib/supabase/account";
 import { getSupabase } from "@/lib/supabase/client";
 
@@ -272,6 +272,28 @@ export default function Home() {
     setScreen("result");
   }
 
+  async function removeHistorySession(rootId: string) {
+    const familyIds = timelines
+      .filter((item) => item.id === rootId || item.rootSessionId === rootId)
+      .map((item) => item.id);
+    const result = await deleteSessionTree(rootId);
+    if (result.error || result.deletedIds.length === 0) return result.error ?? "Диалог не найден.";
+    setTimelines((current) => current.filter((item) => !result.deletedIds.includes(item.id)));
+    setSessions((current) => current.filter((item) => !result.deletedIds.includes(item.id)));
+    if (sessionId && familyIds.includes(sessionId)) {
+      window.localStorage.removeItem("negotiation-active-session");
+      window.localStorage.removeItem("negotiation-active-state");
+      setSessionId(null);
+      setPlan(null);
+      setMessages([]);
+      setState(createInitialState());
+      setReport(null);
+      setRewrite(null);
+      setBranchInfo({ parentSessionId: null, branchedFromTurn: null, correctionNumber: 0 });
+    }
+    return null;
+  }
+
   async function startVoiceInput() {
     if (voiceListening && recorderRef.current) { recorderRef.current.stop(); return; }
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") { setAiError("Этот браузер не поддерживает запись с микрофона."); return; }
@@ -430,7 +452,7 @@ export default function Home() {
     <main>
       {screen === "home" && <section className="welcome-screen"><div className="welcome-decoration welcome-decoration-top" aria-hidden="true" /><div className="welcome-decoration welcome-decoration-bottom" aria-hidden="true" /><div className="welcome-copy"><Image className="welcome-logo" src="/brand/logo-full.png" alt="Босс Нословно" width={188} height={221} priority /><h1>Станьте боссом<br />переговоров!</h1><p>Интерактивный тренажер на основе ИИ,<br className="welcome-desktop-break" /> помогающий уверенно вести любые<br className="welcome-desktop-break" /> переговоры — в работе и в жизни.</p><button className="welcome-start" onClick={reset}>Начать <span aria-hidden="true">→</span></button></div><div className="welcome-visual"><Image src="/brand/landing-people.png" alt="Деловые переговоры" width={818} height={552} priority /></div></section>}
 
-      {screen === "history" && <HistoryLibrary timelines={timelines} loading={historyLoading} error={historyError} selectedSessionId={historyTargetId} onOpen={(id) => void openSavedSession(id)} onPoint={(id, message) => void openHistoryPoint(id, message)} onNew={reset} />}
+      {screen === "history" && <HistoryLibrary timelines={timelines} loading={historyLoading} error={historyError} selectedSessionId={historyTargetId} onOpen={(id) => void openSavedSession(id)} onPoint={(id, message) => void openHistoryPoint(id, message)} onDelete={removeHistorySession} onNew={reset} />}
 
       {screen === "results" && <ResultsArchive timelines={timelines} loading={historyLoading} onOpen={(id) => void openResult(id)} onNew={reset} />}
 
@@ -483,28 +505,128 @@ function translateAuthError(message: string) {
   return `Не удалось выполнить вход: ${message}`;
 }
 
-function HistoryLibrary({ timelines, loading, error, selectedSessionId, onOpen, onPoint, onNew }: { timelines: SessionTimeline[]; loading: boolean; error: string; selectedSessionId: string | null; onOpen: (id: string) => void; onPoint: (id: string, message: StoredMessage) => void; onNew: () => void }) {
+function formatSessionMoment(value: string) {
+  return new Intl.DateTimeFormat("ru-RU", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
+
+function HistoryLibrary({ timelines, loading, error, selectedSessionId, onOpen, onPoint, onDelete, onNew }: {
+  timelines: SessionTimeline[];
+  loading: boolean;
+  error: string;
+  selectedSessionId: string | null;
+  onOpen: (id: string) => void;
+  onPoint: (id: string, message: StoredMessage) => void;
+  onDelete: (rootId: string) => Promise<string | null>;
+  onNew: () => void;
+}) {
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(selectedSessionId);
+  const [deleteTarget, setDeleteTarget] = useState<SessionTimeline | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
   const [scale, setScale] = useState(.9);
   const [offset, setOffset] = useState({ x: 46, y: 70 });
   const drag = useRef<{ x: number; y: number; originX: number; originY: number } | null>(null);
+
   useEffect(() => {
     const release = () => { drag.current = null; };
     window.addEventListener("pointerup", release);
     window.addEventListener("pointercancel", release);
     window.addEventListener("blur", release);
-    return () => { window.removeEventListener("pointerup", release); window.removeEventListener("pointercancel", release); window.removeEventListener("blur", release); };
+    return () => {
+      window.removeEventListener("pointerup", release);
+      window.removeEventListener("pointercancel", release);
+      window.removeEventListener("blur", release);
+    };
   }, []);
+
+  useEffect(() => {
+    if (!deleteTarget) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !deleting) setDeleteTarget(null);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [deleteTarget, deleting]);
+
   const normalizedQuery = query.trim().toLocaleLowerCase("ru-RU");
   const roots = timelines.filter((session) => !session.parentSessionId);
-  const visible = roots.filter((session) => { const family = timelines.filter((item) => (item.rootSessionId ?? item.id) === session.id); return !normalizedQuery || session.title.toLocaleLowerCase("ru-RU").includes(normalizedQuery) || family.some((item) => item.messages.some((message) => message.text.toLocaleLowerCase("ru-RU").includes(normalizedQuery))); });
+  const visible = roots.filter((session) => {
+    const family = timelines.filter((item) => (item.rootSessionId ?? item.id) === session.id);
+    return !normalizedQuery
+      || session.title.toLocaleLowerCase("ru-RU").includes(normalizedQuery)
+      || family.some((item) => item.messages.some((message) => message.text.toLocaleLowerCase("ru-RU").includes(normalizedQuery)));
+  });
   const selected = timelines.find((session) => session.id === selectedId) ?? null;
   const resetBoard = () => { setScale(.9); setOffset({ x: 46, y: 70 }); };
-  if (!selected) return <section className="history-view history-library"><header className="history-head"><div><p className="kicker">История</p><h1>Ваши диалоги</h1><p>Выберите переговоры, чтобы открыть дерево реплик и ответвлений.</p></div><button className="primary" onClick={onNew}>Новые переговоры</button></header><div className="tree-search"><AppIcon name="chat" /><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Найти диалог, слово или фразу" /></div>{error && <p className="ai-error">{error}</p>}{loading ? <p className="history-empty">Загрузка диалогов…</p> : visible.length === 0 ? <p className="history-empty">Сохранённых переговоров пока нет.</p> : <div className="dialogue-tabs">{visible.map((session) => <button className="dialogue-tab" key={session.id} onClick={() => { setSelectedId(session.id); resetBoard(); }}><span><small>{new Date(session.updatedAt).toLocaleDateString("ru-RU")}</small><strong>{session.player.name} {session.player.patronymic} ↔ {session.opponent.name} {session.opponent.patronymic}</strong><em>{session.opponent.role}</em></span><b>{session.parentSessionId ? `Ветка ${session.correctionNumber}` : session.status === "active" ? "В процессе" : "Завершён"}</b></button>)}</div>}</section>;
+
+  async function confirmDelete() {
+    if (!deleteTarget || deleting) return;
+    setDeleting(true);
+    setDeleteError("");
+    const deleteFailure = await onDelete(deleteTarget.id);
+    setDeleting(false);
+    if (deleteFailure) { setDeleteError(deleteFailure); return; }
+    setDeleteTarget(null);
+  }
+
+  const confirmation = deleteTarget && <div className="confirm-dialog-backdrop" onMouseDown={(event) => {
+    if (event.target === event.currentTarget && !deleting) setDeleteTarget(null);
+  }}>
+    <section className="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="delete-dialog-title" aria-describedby="delete-dialog-description">
+      <p className="kicker">Подтверждение</p>
+      <h2 id="delete-dialog-title">Удалить диалог?</h2>
+      <p id="delete-dialog-description">Диалог «{deleteTarget.player.name} {deleteTarget.player.patronymic} ↔ {deleteTarget.opponent.name} {deleteTarget.opponent.patronymic}» и все его ответвления будут удалены без возможности восстановления.</p>
+      <small>Создан {formatSessionMoment(deleteTarget.createdAt)}</small>
+      {deleteError && <p className="confirm-dialog-error">{deleteError}</p>}
+      <div className="confirm-dialog-actions">
+        <button className="quiet" type="button" onClick={() => setDeleteTarget(null)} disabled={deleting} autoFocus>Отмена</button>
+        <button className="danger-button" type="button" onClick={() => void confirmDelete()} disabled={deleting}>{deleting ? "Удаляем…" : "Удалить"}</button>
+      </div>
+    </section>
+  </div>;
+
+  if (!selected) return <section className="history-view history-library">
+    <header className="history-head">
+      <div><p className="kicker">История</p><h1>Ваши диалоги</h1><p>Выберите переговоры, чтобы открыть дерево реплик и ответвлений.</p></div>
+      <button className="primary" onClick={onNew}>Новые переговоры</button>
+    </header>
+    <div className="tree-search"><AppIcon name="chat" /><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Найти диалог, слово или фразу" /></div>
+    {error && <p className="ai-error">{error}</p>}
+    {loading ? <p className="history-empty">Загрузка диалогов…</p> : visible.length === 0 ? <p className="history-empty">Сохранённых переговоров пока нет.</p> : <div className="dialogue-tabs">{visible.map((session) => <article className="dialogue-tab" key={session.id}>
+      <button className="dialogue-tab-open" type="button" onClick={() => { setSelectedId(session.id); resetBoard(); }}>
+        <span><small>Создан {formatSessionMoment(session.createdAt)}</small><strong>{session.player.name} {session.player.patronymic} ↔ {session.opponent.name} {session.opponent.patronymic}</strong><em>{session.opponent.role}</em></span>
+        <b>{session.status === "active" ? "В процессе" : "Завершён"}</b>
+      </button>
+      <button className="dialogue-delete" type="button" onClick={() => { setDeleteError(""); setDeleteTarget(session); }} aria-label={`Удалить диалог с ${session.opponent.name}`}>Удалить</button>
+    </article>)}</div>}
+    {confirmation}
+  </section>;
+
   const selectedRoot = selected.rootSessionId ?? selected.id;
   const related = timelines.filter((session) => (session.rootSessionId ?? session.id) === selectedRoot).sort((a, b) => a.correctionNumber - b.correctionNumber);
-  return <section className="history-view board-view"><header className="board-dialog-head"><button className="quiet" onClick={() => setSelectedId(null)}>← Все диалоги</button><div><strong>{selected.player.name} {selected.player.patronymic} ↔ {selected.opponent.name} {selected.opponent.patronymic}</strong><small>{new Date(selected.updatedAt).toLocaleDateString("ru-RU")} · {selected.opponent.role}</small></div><div className="zoom-controls"><button onClick={() => setScale((value) => Math.max(.5, value - .1))}>−</button><span>{Math.round(scale * 100)}%</span><button onClick={() => setScale((value) => Math.min(1.4, value + .1))}>+</button><button onClick={resetBoard}>По центру</button></div></header><div className="dialogue-board" onPointerDown={(event) => { if ((event.target as HTMLElement).closest("button")) return; event.preventDefault(); drag.current = { x: event.clientX, y: event.clientY, originX: offset.x, originY: offset.y }; event.currentTarget.setPointerCapture(event.pointerId); }} onPointerMove={(event) => { if (!drag.current || event.buttons === 0) { drag.current = null; return; } event.preventDefault(); setOffset({ x: drag.current.originX + event.clientX - drag.current.x, y: drag.current.originY + event.clientY - drag.current.y }); }} onPointerUp={(event) => { drag.current = null; if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); }} onPointerCancel={() => { drag.current = null; }} onLostPointerCapture={() => { drag.current = null; }}><div className="board-stage dialogue-flow" style={{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})` }}>{related.map((session) => { const branchMessages = session.parentSessionId ? session.messages.filter((message) => message.turn >= (session.branchedFromTurn ?? 0)) : session.messages; return <article className={`flow-branch ${session.parentSessionId ? "is-branch" : "is-root"}`} key={session.id}><header><span>{session.parentSessionId ? `Ветка ${session.correctionNumber} · после хода ${session.branchedFromTurn}` : "Основной диалог"}</span><button onClick={() => onOpen(session.id)}>Продолжить</button></header>{session.parentSessionId && <div className="fork-origin">Ответвление от основной линии</div>}<div className="flow-nodes">{branchMessages.map((message, index) => { const advice = message.role === "player" ? message.snapshot?.advice : undefined; return <button key={`${session.id}-${message.turn}-${index}`} className={`flow-node ${message.role} ${advice ? "has-advice" : ""}`} onClick={() => onPoint(session.id, message)}><small>{message.role === "player" ? "Вы" : session.opponent.name}</small><strong>{message.text}</strong>{advice && <span className="advice-popover"><small>Совет</small><strong>{advice}</strong></span>}</button>; })}</div></article>; })}</div></div></section>;
+  return <section className="history-view board-view">
+    <header className="board-dialog-head">
+      <button className="quiet" onClick={() => setSelectedId(null)}>← Все диалоги</button>
+      <div><strong>{selected.player.name} {selected.player.patronymic} ↔ {selected.opponent.name} {selected.opponent.patronymic}</strong><small>Создан {formatSessionMoment(selected.createdAt)} · {selected.opponent.role}</small></div>
+      <div className="zoom-controls"><button onClick={() => setScale((value) => Math.max(.5, value - .1))}>−</button><span>{Math.round(scale * 100)}%</span><button onClick={() => setScale((value) => Math.min(1.4, value + .1))}>+</button><button onClick={resetBoard}>По центру</button></div>
+    </header>
+    <div className="dialogue-board" onPointerDown={(event) => { if ((event.target as HTMLElement).closest("button")) return; event.preventDefault(); drag.current = { x: event.clientX, y: event.clientY, originX: offset.x, originY: offset.y }; event.currentTarget.setPointerCapture(event.pointerId); }} onPointerMove={(event) => { if (!drag.current || event.buttons === 0) { drag.current = null; return; } event.preventDefault(); setOffset({ x: drag.current.originX + event.clientX - drag.current.x, y: drag.current.originY + event.clientY - drag.current.y }); }} onPointerUp={(event) => { drag.current = null; if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); }} onPointerCancel={() => { drag.current = null; }} onLostPointerCapture={() => { drag.current = null; }}>
+      <div className="board-stage dialogue-flow" style={{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})` }}>{related.map((session) => {
+        const branchMessages = session.parentSessionId ? session.messages.filter((message) => message.turn >= (session.branchedFromTurn ?? 0)) : session.messages;
+        return <article className={`flow-branch ${session.parentSessionId ? "is-branch" : "is-root"}`} key={session.id}><header><span>{session.parentSessionId ? `Ветка ${session.correctionNumber} · после хода ${session.branchedFromTurn}` : "Основной диалог"}</span><button onClick={() => onOpen(session.id)}>Продолжить</button></header>{session.parentSessionId && <div className="fork-origin">Ответвление от основной линии</div>}<div className="flow-nodes">{branchMessages.map((message, index) => {
+          const advice = message.role === "player" ? message.snapshot?.advice : undefined;
+          return <button key={`${session.id}-${message.turn}-${index}`} className={`flow-node ${message.role} ${advice ? "has-advice" : ""}`} onClick={() => onPoint(session.id, message)}><small>{message.role === "player" ? "Вы" : session.opponent.name}</small><strong>{message.text}</strong>{advice && <span className="advice-popover"><small>Совет</small><strong>{advice}</strong></span>}</button>;
+        })}</div></article>;
+      })}</div>
+    </div>
+  </section>;
 }
 
 function ResultsArchive({ timelines, loading, onOpen, onNew }: { timelines: SessionTimeline[]; loading: boolean; onOpen: (id: string) => void; onNew: () => void }) {

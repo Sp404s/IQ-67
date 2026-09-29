@@ -192,6 +192,18 @@ export async function deleteEmptySessions(excludeId?: string | null) {
   return error ? 0 : emptyIds.length;
 }
 
+export async function deleteSessionTree(rootSessionId: string) {
+  const supabase = await ensureUser();
+  if (!supabase) return { deletedIds: [] as string[], error: "Supabase не настроен." };
+  const { data, error } = await supabase
+    .from("negotiation_sessions")
+    .delete()
+    .or(`id.eq.${rootSessionId},root_session_id.eq.${rootSessionId}`)
+    .select("id");
+  if (error) return { deletedIds: [] as string[], error: error.message };
+  return { deletedIds: (data ?? []).map((row) => String(row.id)), error: null };
+}
+
 export async function createBranchSession(sourceSessionId: string, fromTurn: number, player: SideProfile, opponent: SideProfile, plan: NegotiationPlan, baseState: NegotiationState) {
   const supabase = await ensureUser(); if (!supabase) return null;
   const { data: source, error: sourceError } = await supabase.from("negotiation_sessions").select("id,root_session_id").eq("id", sourceSessionId).single();
