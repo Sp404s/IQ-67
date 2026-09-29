@@ -283,3 +283,48 @@ button,input,textarea,select{font:inherit}
 .dialogue-composer .icon-action:disabled{opacity:1!important}
 .dialogue-composer .icon-action .app-icon-image{opacity:1!important;filter:none!important}
 .dialogue-composer .icon-action:hover,.dialogue-composer .icon-action:focus-visible{background:rgba(255,255,255,.16)!important}
+
+/* Brand landing screen and opponent portraits */
+html,body{font-family:var(--font-manrope),Arial,Helvetica,sans-serif}
+.app-shell.welcome-mode{width:100%;height:100svh;min-height:620px;padding:0;overflow:hidden;background:#fff}
+.welcome-mode main{width:100%;height:100%;max-width:none}
+.welcome-screen{position:relative;width:100%;height:100%;min-height:620px;overflow:hidden;background:linear-gradient(122deg,#fff 0%,#fff 43%,#f9fbfc 63%,#d7ebf8 100%);isolation:isolate}
+.welcome-screen::before{content:"";position:absolute;z-index:-2;right:-9vw;top:-27vw;width:64vw;height:64vw;border-radius:50%;background:radial-gradient(circle at 45% 55%,#8fc7eb 0 25%,#cce4f5 57%,rgba(255,255,255,0) 72%)}
+.welcome-screen::after{content:"";position:absolute;z-index:-2;left:-18vw;bottom:-31vw;width:62vw;height:62vw;border-radius:50%;background:radial-gradient(circle at 64% 34%,#f5c38f 0 25%,#f9dec2 53%,rgba(255,255,255,0) 73%)}
+.welcome-decoration{position:absolute;z-index:-1;border:1.5px solid rgba(255,255,255,.92);border-radius:50%;pointer-events:none}
+.welcome-decoration-top{right:-9vw;top:-18vw;width:47vw;height:34vw;transform:rotate(19deg)}
+.welcome-decoration-bottom{left:-13vw;bottom:-20vw;width:43vw;height:34vw;transform:rotate(28deg)}
+.welcome-copy{position:absolute;z-index:3;left:clamp(54px,6.4vw,98px);top:clamp(48px,7vh,78px);width:min(43vw,560px);display:flex;flex-direction:column;align-items:flex-start}
+.welcome-logo{width:clamp(112px,11vw,168px);height:auto;object-fit:contain;margin-bottom:clamp(24px,4vh,44px)}
+.welcome-copy h1{margin:0;color:#321b11;font-family:var(--font-cormorant),Georgia,serif;font-size:clamp(60px,5.35vw,82px);font-weight:600;line-height:.82;letter-spacing:-.045em}
+.welcome-copy p{margin:clamp(24px,3.2vh,34px) 0 0;color:#7d482d;font-size:clamp(16px,1.45vw,21px);line-height:1.42}
+.welcome-start{min-width:238px;min-height:62px;margin-top:clamp(28px,4.3vh,42px);display:inline-flex;align-items:center;justify-content:center;gap:16px;padding:14px 28px;border:0;border-radius:20px;background:#7b3e1e;color:#fff;font-size:clamp(23px,2vw,31px);font-weight:400;box-shadow:0 14px 32px rgba(101,54,31,.16);transition:transform .22s ease,background .22s ease,box-shadow .22s ease}
+.welcome-start span{font-size:1.18em;line-height:1;transition:transform .22s ease}.welcome-start:hover,.welcome-start:focus-visible{background:#5f2e18;transform:translateY(-2px);box-shadow:0 18px 38px rgba(101,54,31,.24)}.welcome-start:hover span,.welcome-start:focus-visible span{transform:translateX(5px)}
+.welcome-visual{position:absolute;z-index:2;right:clamp(-52px,-2.5vw,-24px);top:50%;width:min(64vw,870px);transform:translateY(-42%)}
+.welcome-visual img{display:block;width:100%;height:auto;filter:drop-shadow(0 22px 38px rgba(64,69,71,.08))}
+.opponent-portrait-image{z-index:0;object-fit:cover;object-position:center 38%}
+.opponent-portrait-shade{position:absolute;z-index:1;inset:0;background:linear-gradient(180deg,rgba(24,15,10,0) 47%,rgba(35,20,13,.76) 100%);pointer-events:none}
+.opponent-portrait .portrait-copy{z-index:2;color:#fff;text-shadow:0 2px 18px rgba(0,0,0,.28)}
+.opponent-portrait .portrait-copy p:last-child{color:rgba(255,255,255,.86)}
+
+@media(max-width:900px){
+  .welcome-copy{left:40px;width:46vw}.welcome-copy h1{font-size:clamp(48px,6.8vw,66px)}.welcome-visual{right:-9vw;width:67vw}
+}
+
+@media(max-width:700px){
+  .app-shell.welcome-mode,.welcome-screen{height:100svh;min-height:600px}
+  .welcome-screen{display:flex;flex-direction:column;padding:clamp(24px,5vh,42px) 22px 14px;background:linear-gradient(155deg,#fff 0 56%,#e4f2fb 100%)}
+  .welcome-screen::before{right:-38vw;top:-24vw;width:112vw;height:96vw}.welcome-screen::after{left:-52vw;bottom:-44vw;width:112vw;height:112vw}
+  .welcome-decoration-top{right:-35vw;top:-20vw;width:95vw;height:58vw}.welcome-decoration-bottom{left:-45vw;bottom:-25vw;width:95vw;height:75vw}
+  .welcome-copy{position:relative;left:auto;top:auto;width:100%;align-items:flex-start}
+  .welcome-logo{width:90px;margin-bottom:20px}
+  .welcome-copy h1{font-size:clamp(45px,13.2vw,58px);line-height:.86}
+  .welcome-copy p{margin-top:18px;font-size:14px;line-height:1.45}.welcome-desktop-break{display:none}
+  .welcome-start{min-width:180px;min-height:52px;margin-top:22px;border-radius:16px;font-size:21px}
+  .welcome-visual{position:relative;right:auto;top:auto;width:min(112%,560px);margin:clamp(24px,4vh,40px) -7% -2% auto;transform:none}
+  .opponent-portrait-image{object-position:center 34%}
+}
+
+@media(max-height:700px) and (min-width:701px){
+  .welcome-copy{top:34px}.welcome-logo{width:104px;margin-bottom:18px}.welcome-copy h1{font-size:55px}.welcome-copy p{margin-top:18px;font-size:15px}.welcome-start{min-width:205px;min-height:52px;margin-top:22px;font-size:23px}.welcome-visual{width:min(61vw,760px)}
+}
