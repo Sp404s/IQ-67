@@ -277,3 +277,9 @@ button,input,textarea,select{font:inherit}
   h1,.profile-view h1,.settings-view h1,.results-archive h1,.history-library h1{max-width:100%;font-size:32px!important;overflow-wrap:anywhere}
   .settings-controls,.settings-grid,.stats-strip{grid-template-columns:1fr}.settings-card,.settings-grid article,.result-session-card{min-width:0;overflow-wrap:anywhere}
 }
+
+/* Optical alignment and consistent controls in the dialogue composer */
+.dialogue-composer>.composer-actions{top:calc(50% + 2px)}
+.dialogue-composer .icon-action:disabled{opacity:1!important}
+.dialogue-composer .icon-action .app-icon-image{opacity:1!important;filter:none!important}
+.dialogue-composer .icon-action:hover,.dialogue-composer .icon-action:focus-visible{background:rgba(255,255,255,.16)!important}

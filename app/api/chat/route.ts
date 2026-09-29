@@ -1,4 +1,5 @@
 import type { NegotiationPlan, NegotiationState, PartySide, PlayerAction, SemanticEvaluation, SideProfile } from "@/app/negotiation";
+import { createClient } from "@supabase/supabase-js";
 
 type ChatMessage = { role: "player" | "opponent"; text: string };
 type ChatRequest = { player: SideProfile; opponent: SideProfile; plan: NegotiationPlan; state: NegotiationState; messages: ChatMessage[]; messageCount: number; sessionId?: string | null };
@@ -7,6 +8,38 @@ const model = process.env.GEMINI_MODEL ?? "gemini-3.1-flash-lite";
 const actions = new Set<PlayerAction>(["question", "offer", "trade", "pressure", "alternative", "statement"]);
 const concerns = new Set<SemanticEvaluation["ethicalConcern"]>(["none", "ambiguity", "disrespect", "deception", "coercion"]);
 const clampDelta = (value: unknown) => Math.max(-15, Math.min(15, Math.round(Number(value) || 0)));
+
+type StoredContext = {
+  player: SideProfile;
+  opponent: SideProfile;
+  plan: NegotiationPlan;
+  state: NegotiationState;
+  messages: ChatMessage[];
+};
+
+async function loadStoredContext(request: Request, sessionId?: string | null): Promise<StoredContext | null> {
+  const authorization = request.headers.get("authorization");
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!authorization?.startsWith("Bearer ") || !sessionId || !url || !key) return null;
+  const supabase = createClient(url, key, {
+    global: { headers: { Authorization: authorization } },
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+  });
+  const [sessionResult, messagesResult] = await Promise.all([
+    supabase.from("negotiation_sessions").select("player,opponent,plan,current_state").eq("id", sessionId).single(),
+    supabase.from("negotiation_messages").select("role,content,turn,id").eq("session_id", sessionId).order("turn").order("id").limit(120),
+  ]);
+  if (sessionResult.error || messagesResult.error || !sessionResult.data) return null;
+  const row = sessionResult.data;
+  return {
+    player: row.player as SideProfile,
+    opponent: row.opponent as SideProfile,
+    plan: row.plan as NegotiationPlan,
+    state: row.current_state as NegotiationState,
+    messages: (messagesResult.data ?? []).map((message) => ({ role: message.role as ChatMessage["role"], text: String(message.content) })),
+  };
+}
 
 function resolveSide(profile: SideProfile): PartySide {
   if (["buyer", "provider", "neutral"].includes(profile.side)) return profile.side;
@@ -72,7 +105,7 @@ async function complete(apiKey: string, messages: Array<{ role: string; content:
 
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
-      const response = await fetch("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", { method: "POST", headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }, body: JSON.stringify({ model, messages, temperature: json ? 0.25 : 0.55, max_completion_tokens: json ? 1200 : 500, response_format: json ? { type: "json_object" } : undefined }), cache: "no-store" });
+      const response = await fetch("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", { method: "POST", headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }, body: JSON.stringify({ model, messages, temperature: json ? 0.45 : 0.65, max_completion_tokens: json ? 1400 : 600, response_format: json ? { type: "json_object" } : undefined }), cache: "no-store" });
       const data = await response.json().catch(() => ({})) as GeminiResult;
       if (response.ok) {
         const content = data.choices?.[0]?.message?.content?.trim();
@@ -104,19 +137,61 @@ export async function POST(request: Request) {
   let body: ChatRequest;
   try { body = await request.json() as ChatRequest; } catch { return Response.json({ error: "Некорректный запрос." }, { status: 400 }); }
   if (!body.opponent?.goal || !body.plan?.opponentPrompt || !Array.isArray(body.plan.route) || !body.messages?.length) return Response.json({ error: "Не хватает данных переговоров." }, { status: 400 });
+  const stored = await loadStoredContext(request, body.sessionId);
+  const player = stored?.player ?? body.player;
+  const opponent = stored?.opponent ?? body.opponent;
+  const plan = stored?.plan ?? body.plan;
+  const state = stored?.state ?? body.state;
   const latest = [...body.messages].reverse().find((message) => message.role === "player")?.text ?? "";
-  const side = resolveSide(body.opponent);
+  const contextMessages = stored ? [...stored.messages] : body.messages;
+  const storedLast = contextMessages.at(-1);
+  if (latest && (storedLast?.role !== "player" || storedLast.text.trim() !== latest.trim())) contextMessages.push({ role: "player", text: latest });
+  const side = resolveSide(opponent);
   const sideRule = side === "buyer" ? "Ты заказчик: оцениваешь предложение и не продаёшь пользователю услуги." : side === "provider" ? "Ты исполнитель: предлагаешь услугу и не изображаешь заказчика." : "Строго соблюдай указанную роль.";
-  const history = body.messages.slice(-24).map((message) => ({ role: message.role === "player" ? "user" : "assistant", content: message.text.slice(0, 1600) }));
-  const dialogueSystem = `Ты одновременно играешь оппонента и оцениваешь последний ход в учебном симуляторе переговоров. ${sideRule}\n${body.plan.opponentPrompt}\nПеред ответом молча выполни алгоритм: 1) определи предмет услуги из профиля; 2) пойми намерение последней реплики; 3) найди уже известные факты в истории и памяти; 4) выбери один следующий логичный шаг разговора; 5) проверь, что ответ звучит от лица заказчика и относится к указанной услуге. Данные профиля — факты, а не готовые фразы. Никогда не вставляй «создаю сайты» после слов «услуга» или «предложение»: преобразуй в «разработка сайта» либо перефразируй предложение. Не повторяй приветствие, уже заданный вопрос или прежний ответ. Не перескакивай на другую услугу. Если пользователь дал конкретику, отреагируй на неё до нового вопроса. Состояние: доверие ${body.state.trust}, интерес ${body.state.dealInterest}, раздражение ${body.state.irritation}, недопонимание ${body.state.misunderstanding}. Память: ${JSON.stringify(body.state.memory)}. Ответ оппонента: 1–4 цельных предложения.`;
+  const history = contextMessages.slice(-30).map((message) => ({ role: message.role === "player" ? "user" : "assistant", content: message.text.slice(0, 1600) }));
+  const remainingSpin = plan.route.filter((step) => step.id.startsWith("spin-") && !state.matchedKeywords.includes(step.id));
+  const phase = remainingSpin.length ? "выявление потребности" : !state.matchedKeywords.includes("objection") ? "обсуждение предложения и возражений" : "фиксация условий и следующего шага";
+  const emotionalMode = state.irritation >= 65 ? "раздражён, отвечает короче и требует конкретики" : state.trust >= 70 ? "доверяет собеседнику и готов раскрывать детали" : state.dealInterest >= 70 ? "заинтересован, но продолжает проверять риски" : "спокоен, осторожен и оценивает полезность предложения";
+  const dataSource = stored ? "Сведения ниже загружены из сохранённой сессии Supabase и являются источником истины." : "Используй сведения текущей сессии как источник истины.";
+  const dialogueSystem = `Ты играешь живого человека в учебном симуляторе переговоров и отдельно оцениваешь последний ход игрока. ${sideRule}
+${dataSource}
+
+РОЛИ И ПРЕДМЕТ РАЗГОВОРА
+- Игрок: ${player.name} ${player.patronymic}; профессия: ${player.role || "не указана"}; продаёт: «${player.services || player.goal || "услуга не указана"}»; опыт и сильные стороны: ${player.experienceStrengths || "не указаны"}.
+- Ты: ${opponent.name} ${opponent.patronymic}, заказчик из сферы «${opponent.role}».
+- Твоя деловая цель: ${opponent.goal}.
+- Твоя ситуация и потребность: ${opponent.person}.
+- Личная мотивация: ${opponent.motivation}. Ограничения: ${opponent.boundaries}. Скрытый интерес: ${opponent.hiddenInterest}.
+- Характер: ${opponent.character}. Речь: ${opponent.speechStyle}. Привычка: ${opponent.habits}. Лексика: ${opponent.languageStyle}.
+- Текущий этап разговора: ${phase}. Текущее отношение: ${emotionalMode}.
+
+КАК ВЕСТИ ДИАЛОГ
+1. Сначала пойми по смыслу услугу игрока. Разговорную формулировку нормализуй молча: «создаю сайты» означает разработку сайтов. Никогда не повторяй её в неграмотной конструкции.
+2. Реагируй на конкретное содержание последней реплики. Если задан вопрос — сначала ответь на него. Если предложены условия — оцени их относительно своей цели, ограничений и уже сказанного.
+3. Говори от первого лица заказчика. Не предлагай услуги игроку, не становись продавцом, консультантом или тренером.
+4. Раскрывай информацию постепенно. Не перечисляй сразу все скрытые параметры. Детали, которых нет в контексте, можно осторожно конкретизировать только если они правдоподобны для указанной сферы и не меняют цель, бюджет, сроки или договорённости.
+5. Поддерживай отношения: замечай полезные уточнения, помни обещания и договорённости, при давлении становись сдержаннее, при ясной выгоде проявляй интерес.
+6. Продвигай разговор на один шаг. Задавай не больше одного содержательного вопроса за ответ. Иногда уместна реакция без вопроса.
+7. Не повторяй приветствие, прежние ответы, одинаковые вводные и уже закрытые вопросы. Не употребляй канцелярские заготовки вроде «Для меня важно следующее».
+8. Ответ должен звучать как естественная русская речь: 1–3 предложения, обычно 20–70 слов.
+
+Состояние: доверие ${state.trust}, интерес ${state.dealInterest}, раздражение ${state.irritation}, недопонимание ${state.misunderstanding}.
+Память разговора: ${JSON.stringify(state.memory)}.
+Дополнительная карточка роли: ${plan.opponentPrompt}`;
   try {
-    const route = body.plan.route.map((step) => `${step.id}: ${step.intent}; признаки: ${step.evidence.join(" | ")}`).join("\n");
-    const prompt = `${dialogueSystem}\nСкрытые цели оценки:\n${route}\nПоследняя реплика пользователя: «${latest.slice(0, 1200)}»\nВерни только компактный JSON. Поле reply — ответ оппонента. Остальные поля — смысловая оценка только последней реплики пользователя. betterReply — более сильный вариант реплики пользователя от первого лица исполнителя. Это совет пользователю, поэтому не пиши его от лица заказчика, не обращайся к пользователю по имени и не повторяй reply. Максимум 3 предложения. Схема: {"reply":"ответ оппонента","action":"question|offer|trade|pressure|alternative|statement","trustDelta":0,"irritationDelta":0,"dealInterestDelta":0,"ethicalConductDelta":0,"misunderstandingDelta":0,"matchedKeywords":["только достигнутые id"],"reserveFound":false,"reserveUsed":false,"rationale":"...","interpretation":"...","betterReply":"...","ethicalConcern":"none|ambiguity|disrespect|deception|coercion","nonverbalCue":"...","memoryUpdates":{"promises":[],"concessions":[],"contradictions":[],"threats":[],"agreements":[],"openQuestions":[]}}`;
-    const result = await complete(apiKey, [{ role: "system", content: prompt }, ...history], true);
-    const parsed = parseCombined(result.content, body.plan.keywords);
-    if (!parsed) throw new Error("Модель вернула некорректный ответ.");
-    if (repeatsHistory(parsed.reply, body.messages) || hasRoleConfusion(parsed.reply, side)) throw new Error("Модель повторила ответ или перепутала роли. Отправьте реплику ещё раз.");
-    return Response.json({ reply: parsed.reply, evaluation: parsed.evaluation, model: result.model });
+    const route = plan.route.map((step) => `${step.id}: ${step.intent}; признаки: ${step.evidence.join(" | ")}`).join("\n");
+    const basePrompt = `${dialogueSystem}\nСкрытые цели оценки:\n${route}\nПоследняя реплика пользователя: «${latest.slice(0, 1200)}»\nВерни только компактный JSON. Поле reply — естественный ответ оппонента. Остальные поля — смысловая оценка только последней реплики пользователя. Засчитывай этап только при наличии смысла, а не отдельного похожего слова. betterReply — более сильный вариант реплики пользователя от первого лица исполнителя. Это совет пользователю, поэтому не пиши его от лица заказчика, не обращайся к пользователю по имени и не повторяй reply. Максимум 3 предложения. Схема: {"reply":"ответ оппонента","action":"question|offer|trade|pressure|alternative|statement","trustDelta":0,"irritationDelta":0,"dealInterestDelta":0,"ethicalConductDelta":0,"misunderstandingDelta":0,"matchedKeywords":["только достигнутые id"],"reserveFound":false,"reserveUsed":false,"rationale":"...","interpretation":"...","betterReply":"...","ethicalConcern":"none|ambiguity|disrespect|deception|coercion","nonverbalCue":"...","memoryUpdates":{"promises":[],"concessions":[],"contradictions":[],"threats":[],"agreements":[],"openQuestions":[]}}`;
+    let lastModel = model;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const correction = attempt ? "\nПредыдущий вариант был отклонён: он повторялся или путал роли. Сформулируй новый ответ заказчика другими словами, сохрани факты и продолжи разговор логично." : "";
+      const result = await complete(apiKey, [{ role: "system", content: basePrompt + correction }, ...history], true);
+      lastModel = result.model;
+      const parsed = parseCombined(result.content, plan.keywords);
+      if (parsed && !repeatsHistory(parsed.reply, contextMessages) && !hasRoleConfusion(parsed.reply, side)) {
+        return Response.json({ reply: parsed.reply, evaluation: parsed.evaluation, model: lastModel, contextSource: stored ? "supabase" : "request" });
+      }
+    }
+    throw new Error("Модель не смогла продолжить разговор без повторения или смешения ролей. Отправьте реплику ещё раз.");
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "Не удалось получить ответ модели." }, { status: 502 });
   }
