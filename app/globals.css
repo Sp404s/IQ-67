@@ -205,3 +205,8 @@ button,input,textarea,select{font:inherit}
 .history-view .flow-branch.is-branch::before{left:50%;right:auto;top:auto;bottom:100%;width:2px;height:48px}
 .history-view .fork-origin{text-align:center;border-left:0;border-top:2px solid var(--brown)}
 @media(max-width:700px){.history-view .dialogue-flow{padding:20px 16px 64px}.history-view .flow-branch{width:min(340px,calc(100vw - 64px))}}
+
+/* App-like interaction: prevent accidental text selection while dragging */
+.app-shell,.auth-shell{-webkit-user-select:none;user-select:none}
+.dialogue-board{touch-action:none;cursor:grab}
+.dialogue-board:active{cursor:grabbing}
