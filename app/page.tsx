@@ -416,16 +416,16 @@ export default function Home() {
   if (authLoading) return <div className="auth-shell"><p>Проверяем аккаунт…</p></div>;
   if (!accountUser) return <AuthScreen />;
 
-  return <div className={`app-shell ${screen === "home" ? "welcome-mode" : ""}`}>
-    {screen !== "home" && <nav className="side-nav" aria-label="Основная навигация">
-      <button className={`icon-button ${screen === "talk" ? "active" : ""}`} data-tooltip={isEnglish ? "Home" : "Главная"} aria-label={isEnglish ? "Home" : "Главная"} onClick={() => void returnToMain()}><AppIcon name="home" /></button>
+  return <div className="app-shell">
+    <nav className="side-nav" aria-label="Основная навигация">
+      <button className={`icon-button ${screen === "home" || screen === "talk" ? "active" : ""}`} data-tooltip={isEnglish ? "Home" : "Главная"} aria-label={isEnglish ? "Home" : "Главная"} onClick={() => void returnToMain()}><AppIcon name="home" /></button>
       <button className={`icon-button ${screen === "history" ? "active" : ""}`} data-tooltip="История диалога" aria-label="История диалога" onClick={() => { setHistoryTargetId(null); setScreen("history"); void refreshHistory(); }}><AppIcon name="history" /></button>
       <button className={`icon-button ${screen === "workspace" ? "active" : ""}`} data-tooltip="Новые переговоры" aria-label="Новые переговоры" onClick={reset}><AppIcon name="spark" /></button>
       <button className={`icon-button ${screen === "results" || screen === "result" ? "active" : ""}`} data-tooltip="Результаты" aria-label="Результаты" onClick={() => { setScreen("results"); void refreshHistory(); }}><AppIcon name="chart" /></button>
       <span className="nav-spacer" />
       <button className={`icon-button ${screen === "profile" ? "active" : ""}`} data-tooltip="Профиль" aria-label="Профиль" onClick={() => setScreen("profile")}><AppIcon name="profile" /></button>
       <button className={`icon-button ${screen === "settings" ? "active" : ""}`} data-tooltip="Настройки" aria-label="Настройки" onClick={() => setScreen("settings")}><AppIcon name="settings" /></button>
-    </nav>}
+    </nav>
     {preparing && <div className="preparation-overlay" role="status"><div className="preparation-loader" /><strong>Создаём ситуацию и оппонента</strong><span>Подбираем сложность, цели и поведение…</span></div>}
     <main>
       {screen === "home" && <section className="welcome-screen"><div className="welcome-decoration welcome-decoration-top" aria-hidden="true" /><div className="welcome-decoration welcome-decoration-bottom" aria-hidden="true" /><div className="welcome-copy"><Image className="welcome-logo" src="/brand/logo-full.png" alt="Босс Нословно" width={188} height={221} priority /><h1>Станьте боссом<br />переговоров!</h1><p>Интерактивный тренажер на основе ИИ,<br className="welcome-desktop-break" /> помогающий уверенно вести любые<br className="welcome-desktop-break" /> переговоры — в работе и в жизни.</p><button className="welcome-start" onClick={reset}>Начать <span aria-hidden="true">→</span></button></div><div className="welcome-visual"><Image src="/brand/landing-people.png" alt="Деловые переговоры" width={818} height={552} priority /></div></section>}
