@@ -197,3 +197,11 @@ button,input,textarea,select{font:inherit}
   .settings-controls,.settings-grid{grid-template-columns:repeat(2,minmax(0,1fr));align-items:stretch}.settings-controls{margin:0 0 16px}.settings-controls>.settings-card,.settings-grid>article{height:100%;min-height:132px}
 }
 @media(max-height:700px) and (min-width:901px){.profile-view,.settings-view{padding:16px 24px}.profile-view>header h1,.settings-view>h1{font-size:34px}.profile-view .profile-form textarea{height:76px;min-height:76px}.settings-controls>.settings-card,.settings-grid>article{min-height:112px;padding:16px}}
+
+/* Dialogue history: one clear vertical timeline, branches continue below */
+.history-view .dialogue-flow{display:flex;flex-direction:column;align-items:center;gap:48px;width:100%;min-width:100%;padding:24px 40px 80px}
+.history-view .flow-branch{width:min(520px,calc(100vw - 260px))}
+.history-view .flow-node.player{margin-left:0}
+.history-view .flow-branch.is-branch::before{left:50%;right:auto;top:auto;bottom:100%;width:2px;height:48px}
+.history-view .fork-origin{text-align:center;border-left:0;border-top:2px solid var(--brown)}
+@media(max-width:700px){.history-view .dialogue-flow{padding:20px 16px 64px}.history-view .flow-branch{width:min(340px,calc(100vw - 64px))}}

@@ -213,12 +213,21 @@ export default function Home() {
       setAiError(error instanceof Error ? error.message : "Не удалось создать подробный отчёт.");
     }
     setReport(nextReport); setReportLoading(false);
-    if (targetSessionId) void saveSessionReport(targetSessionId, nextReport);
+    if (targetSessionId) await saveSessionReport(targetSessionId, nextReport, targetState);
     return nextReport;
   }
 
   async function finishNegotiation() {
-    await buildReport();
+    const completedStatus: NegotiationState["status"] = state.routeProgress >= 80 && state.trust >= 55 && state.dealInterest >= 55
+      ? "deal"
+      : state.trust <= 20 || state.irritation >= 80 || state.dealInterest <= 20
+        ? "walkaway"
+        : "compromise";
+    const completedState = { ...state, status: completedStatus };
+    setState(completedState);
+    window.localStorage.removeItem("negotiation-active-session");
+    window.localStorage.removeItem("negotiation-active-state");
+    await buildReport(completedState);
     setScreen("result");
   }
 
@@ -345,7 +354,7 @@ export default function Home() {
 
   return <div className="app-shell">
     <nav className="side-nav" aria-label="Основная навигация">
-      <button className={`icon-button ${screen === "home" || screen === "talk" ? "active" : ""}`} data-tooltip={isEnglish ? "Home" : "Главная"} aria-label={isEnglish ? "Home" : "Главная"} onClick={() => setScreen(plan ? "talk" : "home")}><AppIcon name="home" /></button>
+      <button className={`icon-button ${screen === "home" || screen === "talk" ? "active" : ""}`} data-tooltip={isEnglish ? "Home" : "Главная"} aria-label={isEnglish ? "Home" : "Главная"} onClick={() => setScreen(plan && messages.length ? (state.status === "active" ? "talk" : "result") : "home")}><AppIcon name="home" /></button>
       <button className={`icon-button ${screen === "history" ? "active" : ""}`} data-tooltip="История диалога" aria-label="История диалога" onClick={() => { setScreen("history"); void refreshHistory(); }}><AppIcon name="history" /></button>
       <button className={`icon-button ${screen === "workspace" ? "active" : ""}`} data-tooltip="Новые переговоры" aria-label="Новые переговоры" onClick={reset}><AppIcon name="spark" /></button>
       <button className={`icon-button ${screen === "results" || screen === "result" ? "active" : ""}`} data-tooltip="Результаты" aria-label="Результаты" onClick={() => { setScreen("results"); void refreshHistory(); }}><AppIcon name="chart" /></button>

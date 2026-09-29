@@ -30,7 +30,7 @@ export type NegotiationPlan = { opponentPrompt: string; route: RouteStep[]; keyw
 export type NegotiationState = {
   turn: number; trust: number; irritation: number; dealInterest: number;
   ethicalConduct: number; misunderstanding: number;
-  reserveFound: boolean; reserveUsed: boolean; status: "active" | "deal" | "walkaway";
+  reserveFound: boolean; reserveUsed: boolean; status: "active" | "deal" | "compromise" | "walkaway";
   matchedKeywords: string[]; routeProgress: number;
   memory: NegotiationMemory;
 };

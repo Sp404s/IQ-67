@@ -226,8 +226,11 @@ export async function createBranchSession(sourceSessionId: string, fromTurn: num
   return { id: branchId, limitReached: false, correctionNumber };
 }
 
-export async function saveSessionReport(sessionId: string, report: SessionReport) {
+export async function saveSessionReport(sessionId: string, report: SessionReport, state?: NegotiationState) {
   const supabase = await ensureUser(); if (!supabase) return false;
-  const { error } = await supabase.from("negotiation_sessions").update({ report, updated_at: new Date().toISOString() }).eq("id", sessionId);
+  const payload = state
+    ? { report, current_state: state, status: state.status, updated_at: new Date().toISOString() }
+    : { report, updated_at: new Date().toISOString() };
+  const { error } = await supabase.from("negotiation_sessions").update(payload).eq("id", sessionId);
   return !error;
 }
