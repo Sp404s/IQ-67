@@ -210,3 +210,23 @@ button,input,textarea,select{font:inherit}
 .app-shell,.auth-shell{-webkit-user-select:none;user-select:none}
 .dialogue-board{touch-action:none;cursor:grab}
 .dialogue-board:active{cursor:grabbing}
+
+/* Unified section rhythm */
+.profile-view,.settings-view,.results-archive,.history-library{padding:24px 32px}
+.profile-view>header,.settings-view>.section-header,.results-archive>.history-head,.history-library>.history-head{min-height:112px;margin:0 0 20px;align-items:flex-start}
+.profile-view>header .kicker,.settings-view>.section-header .kicker,.results-archive>.history-head .kicker,.history-library>.history-head .kicker{margin:0 0 6px}
+.profile-view>header h1,.settings-view>.section-header h1,.results-archive>.history-head h1,.history-library>.history-head h1{margin:0 0 6px;font-size:clamp(34px,4vw,48px);line-height:1.02;letter-spacing:-.04em}
+.profile-view>header p:last-child,.settings-view>.section-header p:last-child,.results-archive>.history-head p:last-child,.history-library>.history-head p:last-child{margin:0;color:var(--muted);font-size:14px;line-height:1.45}
+.results-archive>.history-head>button,.history-library>.history-head>button{align-self:center}
+.settings-view .settings-controls{margin-top:0}
+
+/* Profile form alignment */
+@media(min-width:901px){
+  .profile-view>.profile-form{grid-template-rows:auto auto auto minmax(0,1fr)}
+  .profile-view .profile-form>label:first-of-type{grid-column:1/-1}
+  .profile-view .profile-form>.name-fields label{display:grid;grid-template-rows:18px 14px 44px;gap:4px}
+  .profile-view .profile-form>label:nth-of-type(2),.profile-view .profile-form>label:nth-of-type(3){grid-template-rows:18px 96px;align-self:end}
+}
+.logout-button{width:100%;min-height:44px;margin-top:16px;padding:10px 16px;border:0;border-radius:12px;background:var(--brown);color:#fff;font:inherit;font-weight:700;transition:transform .18s ease,filter .18s ease}
+.logout-button:hover{filter:brightness(.94);transform:translateY(-1px)}
+@media(max-width:900px){.profile-view,.settings-view,.results-archive,.history-library{padding:24px 20px}.profile-view>header,.settings-view>.section-header,.results-archive>.history-head,.history-library>.history-head{min-height:0}}
